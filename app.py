@@ -464,11 +464,16 @@ if df is None:
 
 st.sidebar.header("Filters")
 
-country_filter = st.sidebar.multiselect(
-    "Country",
-    options=sorted(df["country"].unique()),
-    default=sorted(df["country"].unique())
+date_min = df["order_date"].min().date()
+date_max = df["order_date"].max().date()
+
+date_range = st.sidebar.date_input(
+    "Order Date Range",
+    value=(date_min, date_max),
+    min_value=date_min,
+    max_value=date_max
 )
+
 
 category_filter = st.sidebar.multiselect(
     "Product Category",
@@ -512,14 +517,10 @@ workflow_filter = st.sidebar.multiselect(
     default=sorted(df["workflow_stage"].unique())
 )
 
-date_min = df["order_date"].min().date()
-date_max = df["order_date"].max().date()
-
-date_range = st.sidebar.date_input(
-    "Order Date Range",
-    value=(date_min, date_max),
-    min_value=date_min,
-    max_value=date_max
+country_filter = st.sidebar.multiselect(
+    "Country",
+    options=sorted(df["country"].unique()),
+    default=sorted(df["country"].unique())
 )
 
 if isinstance(date_range, tuple) and len(date_range) == 2:
