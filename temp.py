@@ -35,8 +35,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", None)
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+REQUIRED_COLUMNS = [
+    "order_id", "customer_id", "order_date", "product_category", "product_name",
+    "payment_method", "country", "state", "order_value", "past_orders",
+    "past_returns", "chargeback_history", "discount_used", "expedited_shipping",
+    "fraud_score", "return_abuse_score", "unified_risk_score", "risk_level",
+    "risk_type", "recommended_action", "ai_agent_next_step", "action_owner",
+    "automation_level", "risk_reason_summary", "priority_tier", "case_status",
+    "workflow_stage"
+]
 
 
 @st.cache_data
@@ -44,8 +55,15 @@ def load_data():
     path = "data/transactions.csv"
     if not os.path.exists(path):
         return None
+
     df = pd.read_csv(path)
-    df["order_date"] = pd.to_datetime(df["order_date"])
+
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns in dataset: {missing}")
+
+    df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce")
+    df = df.dropna(subset=["order_date"])
     return df
 
 
@@ -59,6 +77,10 @@ def format_currency(x: float) -> str:
     if x >= 1_000:
         return f"${x / 1_000:.1f}K"
     return f"${x:,.0f}"
+
+
+def safe_top_index(series: pd.Series, default: str = "N/A") -> str:
+    return series.index[0] if len(series) > 0 else default
 
 
 def compute_summary_metrics(data: pd.DataFrame):
@@ -175,21 +197,19 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         (data["priority_tier"] == "Critical") & (data["case_status"] == "Open")
     ]
 
-    top_category = (
+    top_category = safe_top_index(
         data.groupby("product_category")["return_abuse_score"]
         .mean()
         .sort_values(ascending=False)
-        .index[0]
     )
 
-    top_state = (
+    top_state = safe_top_index(
         data.groupby("state")["fraud_score"]
         .mean()
         .sort_values(ascending=False)
-        .index[0]
     )
 
-    top_action = data["recommended_action"].value_counts().index[0]
+    top_action = safe_top_index(data["recommended_action"].value_counts())
 
     if "summary" in q or "summarize" in q or "overall" in q:
         return (
@@ -341,7 +361,7 @@ AI Agent Suggested Step:
 
 def ask_groq(prompt: str, system_prompt: str, max_tokens: int = 600) -> str:
     if groq_client is None:
-        return "Groq API key not configured. Add GROQ_API_KEY to your .env file."
+        return "Groq API key not configured. Add GROQ_API_KEY to your .env file or Streamlit secrets."
 
     try:
         response = groq_client.chat.completions.create(
@@ -450,7 +470,11 @@ Task:
     return ask_groq(prompt, system_prompt, max_tokens=700)
 
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Failed to load dataset: {e}")
+    st.stop()
 
 st.title("Aignita RiskIQ")
 st.caption("AI-Powered Risk Intelligence and Action Orchestration for E-commerce")
@@ -462,54 +486,6 @@ if df is None:
 
 st.sidebar.header("Filters")
 
-country_filter = st.sidebar.multiselect(
-    "Country",
-    options=sorted(df["country"].unique()),
-    default=sorted(df["country"].unique())
-)
-
-category_filter = st.sidebar.multiselect(
-    "Product Category",
-    options=sorted(df["product_category"].unique()),
-    default=sorted(df["product_category"].unique())
-)
-
-risk_filter = st.sidebar.multiselect(
-    "Risk Level",
-    options=sorted(df["risk_level"].unique()),
-    default=sorted(df["risk_level"].unique())
-)
-
-payment_filter = st.sidebar.multiselect(
-    "Payment Method",
-    options=sorted(df["payment_method"].unique()),
-    default=sorted(df["payment_method"].unique())
-)
-
-action_filter = st.sidebar.multiselect(
-    "Recommended Action",
-    options=sorted(df["recommended_action"].unique()),
-    default=sorted(df["recommended_action"].unique())
-)
-
-priority_filter = st.sidebar.multiselect(
-    "Priority Tier",
-    options=sorted(df["priority_tier"].unique()),
-    default=sorted(df["priority_tier"].unique())
-)
-
-case_status_filter = st.sidebar.multiselect(
-    "Case Status",
-    options=sorted(df["case_status"].unique()),
-    default=sorted(df["case_status"].unique())
-)
-
-workflow_filter = st.sidebar.multiselect(
-    "Workflow Stage",
-    options=sorted(df["workflow_stage"].unique()),
-    default=sorted(df["workflow_stage"].unique())
-)
-
 date_min = df["order_date"].min().date()
 date_max = df["order_date"].max().date()
 
@@ -520,15 +496,64 @@ date_range = st.sidebar.date_input(
     max_value=date_max
 )
 
+category_filter = st.sidebar.multiselect(
+    "Product Category",
+    options=sorted(df["product_category"].unique()),
+    default=sorted(df["product_category"].unique())
+)
+
+payment_filter = st.sidebar.multiselect(
+    "Payment Method",
+    options=sorted(df["payment_method"].unique()),
+    default=sorted(df["payment_method"].unique())
+)
+
+state_filter = st.sidebar.multiselect(
+    "State",
+    options=sorted(df["state"].unique()),
+    default=sorted(df["state"].unique())
+)
+
+priority_filter = st.sidebar.multiselect(
+    "Priority Tier",
+    options=sorted(df["priority_tier"].unique()),
+    default=sorted(df["priority_tier"].unique())
+)
+
+action_filter = st.sidebar.multiselect(
+    "Recommended Action",
+    options=sorted(df["recommended_action"].unique()),
+    default=sorted(df["recommended_action"].unique())
+)
+
+workflow_filter = st.sidebar.multiselect(
+    "Workflow Stage",
+    options=sorted(df["workflow_stage"].unique()),
+    default=sorted(df["workflow_stage"].unique())
+)
+
+case_status_filter = st.sidebar.multiselect(
+    "Case Status",
+    options=sorted(df["case_status"].unique()),
+    default=sorted(df["case_status"].unique())
+)
+
+
+# risk_filter = st.sidebar.multiselect(
+#     "Risk Level",
+#     options=sorted(df["risk_level"].unique()),
+#     default=sorted(df["risk_level"].unique())
+# )
+
 if isinstance(date_range, tuple) and len(date_range) == 2:
     start_date, end_date = date_range
 else:
     start_date, end_date = date_min, date_max
 
 filtered_df = df[
-    (df["country"].isin(country_filter)) &
+    (df["state"].isin(state_filter)) &
     (df["product_category"].isin(category_filter)) &
-    (df["risk_level"].isin(risk_filter)) &
+    # (df["risk_level"].isin(risk_filter)) &
     (df["payment_method"].isin(payment_filter)) &
     (df["recommended_action"].isin(action_filter)) &
     (df["priority_tier"].isin(priority_filter)) &
@@ -544,21 +569,17 @@ if filtered_df.empty:
 
 metrics = compute_summary_metrics(filtered_df)
 
-top_category = (
+top_category = safe_top_index(
     filtered_df.groupby("product_category")["return_abuse_score"]
     .mean()
     .sort_values(ascending=False)
-    .index[0]
 )
 
-top_state = (
+top_state = safe_top_index(
     filtered_df.groupby("state")["fraud_score"]
     .mean()
     .sort_values(ascending=False)
-    .index[0]
 )
-
-top_action = filtered_df["recommended_action"].value_counts().index[0]
 
 st.markdown(f"""
 <div class="hero-box">
@@ -567,8 +588,8 @@ st.markdown(f"""
         <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged high risk, with
         <b>{format_currency(metrics["revenue_at_risk"])}</b> in revenue at risk.
         There are <b>{metrics["critical_cases"]:,}</b> critical-priority cases.
-        Return pressure is highest in <b>{top_category}</b>, fraud pressure is strongest in
-        <b>{top_state}</b>
+        Return pressure is highest in <b>{top_category}</b>, and fraud pressure is strongest in
+        <b>{top_state}</b>.
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -604,11 +625,14 @@ with tab1:
         trend_df["flagged_orders"] / trend_df["total_orders"] * 100
     ).round(2)
 
-    col1.plotly_chart(
-        px.line(trend_df, x="order_day", y="flagged_rate",
-                title="Flagged Order Rate Over Time (%)"),
-        use_container_width=True
-    )
+    if trend_df.empty:
+        col1.info("No trend data available for the selected filters.")
+    else:
+        col1.plotly_chart(
+            px.line(trend_df, x="order_day", y="flagged_rate",
+                    title="Flagged Order Rate Over Time (%)"),
+            use_container_width=True
+        )
 
     loss_exposure = (
         filtered_df[filtered_df["risk_type"].isin(["Fraud", "Returns"])]
@@ -617,11 +641,14 @@ with tab1:
         .sort_values("order_value", ascending=False)
     )
 
-    col2.plotly_chart(
-        px.bar(loss_exposure, x="risk_type", y="order_value",
-               title="Loss Exposure by Risk Type"),
-        use_container_width=True
-    )
+    if loss_exposure.empty:
+        col2.info("No loss exposure data available for the selected filters.")
+    else:
+        col2.plotly_chart(
+            px.bar(loss_exposure, x="risk_type", y="order_value",
+                   title="Loss Exposure by Risk Type"),
+            use_container_width=True
+        )
 
     col3, col4 = st.columns(2)
 
@@ -643,11 +670,14 @@ with tab1:
     ).reset_index()
     action_dist.columns = ["recommended_action", "count"]
 
-    col4.plotly_chart(
-        px.bar(action_dist, x="recommended_action",
-               y="count", title="Recommended Actions"),
-        use_container_width=True
-    )
+    if action_dist.empty:
+        col4.info("No recommended actions available for the selected filters.")
+    else:
+        col4.plotly_chart(
+            px.bar(action_dist, x="recommended_action",
+                   y="count", title="Recommended Actions"),
+            use_container_width=True
+        )
 
     workflow_dist = (
         filtered_df[filtered_df["risk_level"] == "High"]["workflow_stage"]
@@ -656,11 +686,14 @@ with tab1:
     )
     workflow_dist.columns = ["workflow_stage", "count"]
 
-    st.plotly_chart(
-        px.bar(workflow_dist, x="workflow_stage",
-               y="count", title="Workflow Stage Split"),
-        use_container_width=True
-    )
+    if workflow_dist.empty:
+        st.info("No workflow stage data available for the selected filters.")
+    else:
+        st.plotly_chart(
+            px.bar(workflow_dist, x="workflow_stage",
+                   y="count", title="Workflow Stage Split"),
+            use_container_width=True
+        )
 
 with tab2:
     st.subheader("FraudIQ")
@@ -674,10 +707,20 @@ with tab2:
         fc1.metric("Fraud Cases", f"{len(fraud_df):,}")
         fc2.metric("Fraud Risk Revenue", format_currency(
             fraud_df["order_value"].sum()))
-        fc3.metric("Top Fraud State", fraud_df.groupby("state")[
-                   "fraud_score"].mean().sort_values(ascending=False).index[0])
-        fc4.metric("Top Fraud Payment Method", fraud_df.groupby("payment_method")[
-                   "fraud_score"].mean().sort_values(ascending=False).index[0])
+        fc3.metric(
+            "Top Fraud State",
+            safe_top_index(
+                fraud_df.groupby("state")["fraud_score"].mean(
+                ).sort_values(ascending=False)
+            )
+        )
+        fc4.metric(
+            "Top Fraud Payment Method",
+            safe_top_index(
+                fraud_df.groupby("payment_method")[
+                    "fraud_score"].mean().sort_values(ascending=False)
+            )
+        )
 
         fcol1, fcol2 = st.columns(2)
 
@@ -686,20 +729,31 @@ with tab2:
         fraud_by_payment = fraud_df.groupby("payment_method", as_index=False)[
             "fraud_score"].mean().sort_values("fraud_score", ascending=False)
 
-        fcol1.plotly_chart(px.bar(fraud_by_state, x="state", y="fraud_score",
-                           title="Average Fraud Score by State"), use_container_width=True)
-        fcol2.plotly_chart(px.bar(fraud_by_payment, x="payment_method", y="fraud_score",
-                           title="Average Fraud Score by Payment Method"), use_container_width=True)
+        fcol1.plotly_chart(
+            px.bar(fraud_by_state, x="state", y="fraud_score",
+                   title="Average Fraud Score by State"),
+            use_container_width=True
+        )
+        fcol2.plotly_chart(
+            px.bar(fraud_by_payment, x="payment_method", y="fraud_score",
+                   title="Average Fraud Score by Payment Method"),
+            use_container_width=True
+        )
+
+        fraud_view = fraud_df[
+            [
+                "order_id", "customer_id", "order_date", "state", "payment_method",
+                "order_value", "fraud_score", "priority_tier", "case_status",
+                "workflow_stage", "risk_reason_summary", "recommended_action",
+                "ai_agent_next_step"
+            ]
+        ].sort_values(["fraud_score", "order_value"], ascending=[False, False]).head(50)
 
         st.dataframe(
-            fraud_df[
-                [
-                    "order_id", "customer_id", "order_date", "state", "payment_method",
-                    "order_value", "fraud_score", "priority_tier", "case_status",
-                    "workflow_stage", "risk_reason_summary", "recommended_action",
-                    "ai_agent_next_step"
-                ]
-            ].sort_values(["fraud_score", "order_value"], ascending=[False, False]).head(50),
+            fraud_view.style.format({
+                "order_value": "${:,.2f}",
+                "fraud_score": "{:.3f}",
+            }),
             use_container_width=True
         )
 
@@ -715,10 +769,20 @@ with tab3:
         rc1.metric("Return Abuse Cases", f"{len(returns_df):,}")
         rc2.metric("Return Risk Revenue", format_currency(
             returns_df["order_value"].sum()))
-        rc3.metric("Top Return Category", returns_df.groupby("product_category")[
-                   "return_abuse_score"].mean().sort_values(ascending=False).index[0])
-        rc4.metric("Top Return Product", returns_df.groupby("product_name")[
-                   "return_abuse_score"].mean().sort_values(ascending=False).index[0])
+        rc3.metric(
+            "Top Return Category",
+            safe_top_index(
+                returns_df.groupby("product_category")[
+                    "return_abuse_score"].mean().sort_values(ascending=False)
+            )
+        )
+        rc4.metric(
+            "Top Return Product",
+            safe_top_index(
+                returns_df.groupby("product_name")[
+                    "return_abuse_score"].mean().sort_values(ascending=False)
+            )
+        )
 
         rcol1, rcol2 = st.columns(2)
 
@@ -732,25 +796,62 @@ with tab3:
             .head(10)
         )
 
-        rcol1.plotly_chart(px.bar(returns_by_category, x="product_category", y="return_abuse_score",
-                           title="Return Abuse Score by Category"), use_container_width=True)
-        rcol2.plotly_chart(px.bar(returns_by_product, x="product_name", y="return_abuse_score",
-                           title="Top Products by Return Abuse Score"), use_container_width=True)
+        rcol1.plotly_chart(
+            px.bar(returns_by_category, x="product_category",
+                   y="return_abuse_score", title="Return Abuse Score by Category"),
+            use_container_width=True
+        )
+        rcol2.plotly_chart(
+            px.bar(returns_by_product, x="product_name", y="return_abuse_score",
+                   title="Top Products by Return Abuse Score"),
+            use_container_width=True
+        )
+
+        returns_view = returns_df[
+            [
+                "order_id", "customer_id", "order_date", "product_category", "product_name",
+                "past_returns", "order_value", "return_abuse_score", "priority_tier",
+                "case_status", "workflow_stage", "risk_reason_summary",
+                "recommended_action", "ai_agent_next_step"
+            ]
+        ].sort_values(["return_abuse_score", "order_value"], ascending=[False, False]).head(50)
 
         st.dataframe(
-            returns_df[
-                [
-                    "order_id", "customer_id", "order_date", "product_category", "product_name",
-                    "past_returns", "order_value", "return_abuse_score", "priority_tier",
-                    "case_status", "workflow_stage", "risk_reason_summary",
-                    "recommended_action", "ai_agent_next_step"
-                ]
-            ].sort_values(["return_abuse_score", "order_value"], ascending=[False, False]).head(50),
+            returns_view.style.format({
+                "order_value": "${:,.2f}",
+                "return_abuse_score": "{:.3f}",
+            }),
             use_container_width=True
         )
 
 with tab4:
     st.subheader("Action Center")
+
+    open_flagged_cases = filtered_df[
+        (filtered_df["risk_level"] == "High") & (
+            filtered_df["case_status"] == "Open")
+    ].copy()
+
+    closed_flagged_cases = filtered_df[
+        (filtered_df["risk_level"] == "High") & (
+            filtered_df["case_status"] == "Closed")
+    ].copy()
+
+    potential_loss_prevented = float(closed_flagged_cases["order_value"].sum())
+    closure_rate = (
+        round(len(closed_flagged_cases) /
+              (len(open_flagged_cases) + len(closed_flagged_cases)) * 100, 1)
+        if (len(open_flagged_cases) + len(closed_flagged_cases)) > 0 else 0.0
+    )
+
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    kc1.metric("Open Flagged Cases", f"{len(open_flagged_cases):,}")
+    kc2.metric("Closed Flagged Cases", f"{len(closed_flagged_cases):,}")
+    kc3.metric("Potential Loss Prevented",
+               format_currency(potential_loss_prevented))
+    kc4.metric("Closure Rate", f"{closure_rate:.1f}%")
+
+    st.markdown("---")
 
     ac1, ac2 = st.columns(2)
 
@@ -768,19 +869,39 @@ with tab4:
         .sort_values(["orders", "revenue"], ascending=False)
     )
 
-    ac1.plotly_chart(
-        px.bar(action_summary, x="recommended_action", y="orders",
-               color="automation_level", title="Action Volume by Recommendation"),
-        use_container_width=True
-    )
-    ac2.plotly_chart(
-        px.bar(action_summary, x="action_owner", y="orders",
-               color="priority_tier", title="Action Ownership by Priority"),
-        use_container_width=True
-    )
+    if action_summary.empty:
+        st.warning("No action summary available for the selected filters.")
+    else:
+        ac1.plotly_chart(
+            px.bar(
+                action_summary,
+                x="recommended_action",
+                y="orders",
+                color="automation_level",
+                title="Action Volume by Recommendation"
+            ),
+            use_container_width=True
+        )
 
-    st.markdown("### AI Agent Workflow Recommendations")
-    st.dataframe(action_summary, use_container_width=True)
+        ac2.plotly_chart(
+            px.bar(
+                action_summary,
+                x="action_owner",
+                y="orders",
+                color="priority_tier",
+                title="Action Ownership by Priority"
+            ),
+            use_container_width=True
+        )
+
+        st.markdown("### AI Agent Workflow Recommendations")
+        st.dataframe(
+            action_summary.style.format({
+                "revenue": "${:,.2f}",
+                "avg_risk_score": "{:.3f}",
+            }),
+            use_container_width=True
+        )
 
     st.markdown("### Sample Agent-Ready Action Queue")
     action_queue = filtered_df[
@@ -791,7 +912,33 @@ with tab4:
         ]
     ].sort_values(["unified_risk_score", "order_value"], ascending=[False, False]).head(50)
 
-    st.dataframe(action_queue, use_container_width=True)
+    st.dataframe(
+        action_queue.style.format({
+            "order_value": "${:,.2f}",
+            "unified_risk_score": "{:.3f}",
+        }),
+        use_container_width=True
+    )
+
+    st.markdown("### Resolved Flagged Cases")
+    if closed_flagged_cases.empty:
+        st.info("No resolved flagged cases in the current filter selection.")
+    else:
+        resolved_view = closed_flagged_cases[
+            [
+                "order_id", "customer_id", "order_date", "risk_type", "priority_tier",
+                "recommended_action", "workflow_stage", "order_value",
+                "unified_risk_score", "risk_reason_summary", "action_owner"
+            ]
+        ].sort_values(["unified_risk_score", "order_value"], ascending=[False, False]).head(50)
+
+        st.dataframe(
+            resolved_view.style.format({
+                "order_value": "${:,.2f}",
+                "unified_risk_score": "{:.3f}",
+            }),
+            use_container_width=True
+        )
 
 with tab5:
     st.subheader("Ops Queue")
@@ -802,15 +949,28 @@ with tab5:
     ].copy()
 
     priority_order = {"Critical": 0, "High": 1, "Moderate": 2, "Low": 3}
-    flagged_df["priority_sort"] = flagged_df["priority_tier"].map(
-        priority_order)
-    flagged_df = flagged_df.sort_values(
-        ["priority_sort", "unified_risk_score", "order_value"], ascending=[True, False, False])
+
+    if not flagged_df.empty:
+        flagged_df["priority_sort"] = flagged_df["priority_tier"].map(
+            priority_order)
+        flagged_df = flagged_df.sort_values(
+            ["priority_sort", "unified_risk_score", "order_value"],
+            ascending=[True, False, False]
+        )
+
+    oq1, oq2 = st.columns(2)
+    oq1.metric("Open High-Risk Cases", f"{len(flagged_df):,}")
+    oq2.metric(
+        "Open Revenue at Risk",
+        format_currency(
+            float(flagged_df["order_value"].sum()) if not flagged_df.empty else 0.0)
+    )
 
     qc1, qc2 = st.columns(2)
     qc1.download_button(
         label="Download Open Cases CSV",
-        data=to_csv_download(flagged_df.drop(columns=["priority_sort"])),
+        data=to_csv_download(flagged_df.drop(
+            columns=["priority_sort"], errors="ignore")),
         file_name="aignita_open_cases.csv",
         mime="text/csv"
     )
@@ -824,25 +984,34 @@ with tab5:
     if flagged_df.empty:
         st.warning("No open cases in the current filter selection.")
     else:
+        open_case_view = flagged_df[
+            [
+                "order_id", "customer_id", "order_date", "product_category", "product_name",
+                "country", "state", "payment_method", "order_value",
+                "fraud_score", "return_abuse_score", "unified_risk_score",
+                "risk_type", "priority_tier", "case_status", "workflow_stage",
+                "risk_reason_summary", "recommended_action", "ai_agent_next_step",
+                "action_owner", "automation_level"
+            ]
+        ].head(100)
+
         st.dataframe(
-            flagged_df[
-                [
-                    "order_id", "customer_id", "order_date", "product_category", "product_name",
-                    "country", "state", "payment_method", "order_value",
-                    "fraud_score", "return_abuse_score", "unified_risk_score",
-                    "risk_type", "priority_tier", "case_status", "workflow_stage",
-                    "risk_reason_summary", "recommended_action", "ai_agent_next_step",
-                    "action_owner", "automation_level"
-                ]
-            ].head(100),
+            open_case_view.style.format({
+                "order_value": "${:,.2f}",
+                "fraud_score": "{:.3f}",
+                "return_abuse_score": "{:.3f}",
+                "unified_risk_score": "{:.3f}",
+            }),
             use_container_width=True
         )
 
-        st.markdown("### Case Detail Panel")
+        st.markdown("### Selected Case")
 
         case_options = flagged_df["order_id"].tolist()
         selected_order_id = st.selectbox(
-            "Select an Order ID to inspect", options=case_options)
+            "Select an Order ID to inspect",
+            options=case_options
+        )
         selected_case = flagged_df[flagged_df["order_id"]
                                    == selected_order_id].iloc[0]
         st.session_state["selected_case"] = selected_case
@@ -877,9 +1046,9 @@ with tab5:
 
         timeline_steps = build_case_timeline(selected_case)
         components.html(render_timeline_html(timeline_steps),
-                        height=170, scrolling=False)
+                        height=190, scrolling=False)
 
-        st.markdown("#### Detailed Signals")
+        st.markdown("#### Risk Signals")
         signal_col1, signal_col2, signal_col3, signal_col4 = st.columns(4)
         signal_col1.metric(
             "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
@@ -912,7 +1081,9 @@ with tab6:
         st.session_state["copilot_question"] = "What actions should the ops team prioritize?"
 
     question = st.text_input(
-        "Ask Aignita Copilot", value=st.session_state.get("copilot_question", ""))
+        "Ask Aignita Copilot",
+        value=st.session_state.get("copilot_question", "")
+    )
 
     copilot_mode = st.radio(
         "Copilot Mode",
@@ -922,6 +1093,22 @@ with tab6:
 
     if question:
         selected_case_for_ai = st.session_state.get("selected_case", None)
+
+        if selected_case_for_ai is None:
+            fallback_cases = filtered_df[
+                (filtered_df["risk_level"] == "High") & (
+                    filtered_df["case_status"] == "Open")
+            ].copy()
+            if not fallback_cases.empty:
+                fallback_cases["priority_sort"] = fallback_cases["priority_tier"].map(
+                    {"Critical": 0, "High": 1, "Moderate": 2, "Low": 3}
+                )
+                fallback_cases = fallback_cases.sort_values(
+                    ["priority_sort", "unified_risk_score", "order_value"],
+                    ascending=[True, False, False]
+                )
+                selected_case_for_ai = fallback_cases.iloc[0]
+
         with st.spinner("Copilot thinking..."):
             if copilot_mode == "LLM":
                 answer = ask_risk_copilot(
