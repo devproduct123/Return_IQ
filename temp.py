@@ -31,6 +31,13 @@ st.markdown("""
         margin-bottom: 1rem;
         background: rgba(250,250,250,0.02);
     }
+    .section-note {
+        padding: 0.8rem 1rem;
+        border: 1px solid rgba(120,120,120,0.14);
+        border-radius: 12px;
+        margin-bottom: 0.8rem;
+        background: rgba(250,250,250,0.02);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -64,6 +71,12 @@ def load_data():
 
     df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce")
     df = df.dropna(subset=["order_date"])
+
+    # Normalize naming without forcing immediate dataset regeneration
+    df["risk_type_display"] = df["risk_type"].replace({
+        "Returns": "Return Abuse"
+    })
+
     return df
 
 
@@ -88,13 +101,19 @@ def compute_summary_metrics(data: pd.DataFrame):
     flagged_orders = int((data["risk_level"] == "High").sum())
     flagged_pct = round((flagged_orders / total_orders)
                         * 100, 1) if total_orders else 0.0
-    fraud_cases = int((data["risk_type"] == "Fraud").sum())
-    return_cases = int((data["risk_type"] == "Returns").sum())
+    fraud_cases = int((data["risk_type_display"] == "Fraud").sum())
+    return_cases = int((data["risk_type_display"] == "Return Abuse").sum())
     revenue_at_risk = float(
         data.loc[data["risk_level"] == "High", "order_value"].sum())
     critical_cases = int((data["priority_tier"] == "Critical").sum())
     open_cases = int((data["case_status"] == "Open").sum())
     closed_cases = int((data["case_status"] == "Closed").sum())
+    protected_revenue = float(
+        data.loc[
+            (data["risk_level"] == "High") & (data["case_status"] == "Closed"),
+            "order_value"
+        ].sum()
+    )
 
     return {
         "total_orders": total_orders,
@@ -106,6 +125,7 @@ def compute_summary_metrics(data: pd.DataFrame):
         "critical_cases": critical_cases,
         "open_cases": open_cases,
         "closed_cases": closed_cases,
+        "protected_revenue": protected_revenue,
     }
 
 
@@ -193,6 +213,12 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
     revenue_at_risk = float(
         data.loc[data["risk_level"] == "High", "order_value"].sum())
     open_cases = int((data["case_status"] == "Open").sum())
+    protected_revenue = float(
+        data.loc[
+            (data["risk_level"] == "High") & (data["case_status"] == "Closed"),
+            "order_value"
+        ].sum()
+    )
     critical_open = data[
         (data["priority_tier"] == "Critical") & (data["case_status"] == "Open")
     ]
@@ -215,6 +241,7 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         return (
             f"In the current filtered view, {flagged_orders:,} out of {total_orders:,} orders are flagged high risk. "
             f"Revenue at risk is {format_currency(revenue_at_risk)}. "
+            f"Protected revenue on closed flagged cases is {format_currency(protected_revenue)}. "
             f"There are {open_cases:,} open cases. "
             f"Return abuse is highest in {top_category}, fraud risk is strongest in {top_state}, "
             f"and the most common recommended action is {top_action}."
@@ -244,7 +271,10 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         return f"The highest fraud-risk states in the current view are: {', '.join(top_fraud_states)}."
 
     if "revenue" in q and "risk" in q:
-        return f"Revenue at risk in the current filtered view is {format_currency(revenue_at_risk)}."
+        return (
+            f"Revenue at risk in the current filtered view is {format_currency(revenue_at_risk)}. "
+            f"Protected revenue from closed flagged cases is {format_currency(protected_revenue)}."
+        )
 
     if "priority" in q or "review first" in q or "what should i do first" in q:
         if critical_open.empty:
@@ -265,7 +295,7 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
 
     return (
         "I can help summarize current risk, identify top fraud states, top return-abuse categories or products, "
-        "revenue at risk, open cases, and what the ops team should prioritize first."
+        "revenue at risk, protected revenue, open cases, and what the ops team should prioritize first."
     )
 
 
@@ -280,8 +310,14 @@ def build_dashboard_context(data: pd.DataFrame) -> str:
         data.loc[data["risk_level"] == "High", "order_value"].sum())
     open_cases = int((data["case_status"] == "Open").sum())
     critical_cases = int((data["priority_tier"] == "Critical").sum())
-    fraud_cases = int((data["risk_type"] == "Fraud").sum())
-    return_cases = int((data["risk_type"] == "Returns").sum())
+    fraud_cases = int((data["risk_type_display"] == "Fraud").sum())
+    return_cases = int((data["risk_type_display"] == "Return Abuse").sum())
+    protected_revenue = float(
+        data.loc[
+            (data["risk_level"] == "High") & (data["case_status"] == "Closed"),
+            "order_value"
+        ].sum()
+    )
 
     top_category = (
         data.groupby("product_category")["return_abuse_score"]
@@ -306,6 +342,7 @@ Total orders: {total_orders}
 Flagged orders: {flagged_orders}
 Flagged percent: {flagged_pct:.1f}%
 Revenue at risk: ${revenue_at_risk:,.0f}
+Protected revenue: ${protected_revenue:,.0f}
 
 Open cases: {open_cases}
 Critical cases: {critical_cases}
@@ -334,7 +371,7 @@ Selected Order Case Details
 Order ID: {case_row["order_id"]}
 Customer ID: {case_row["customer_id"]}
 
-Risk Type: {case_row["risk_type"]}
+Risk Type: {case_row["risk_type_display"]}
 Priority Tier: {case_row["priority_tier"]}
 Case Status: {case_row["case_status"]}
 Workflow Stage: {case_row["workflow_stage"]}
@@ -429,7 +466,8 @@ Do not claim actions were executed.
 Create a short merchant-facing risk summary for the current dashboard view.
 Include:
 - current risk situation
-- biggest fraud/returns drivers
+- biggest fraud/return-abuse drivers
+- revenue at risk vs protected revenue
 - what should be prioritized next
 Use plain business language.
 """,
@@ -538,13 +576,6 @@ case_status_filter = st.sidebar.multiselect(
     default=sorted(df["case_status"].unique())
 )
 
-
-# risk_filter = st.sidebar.multiselect(
-#     "Risk Level",
-#     options=sorted(df["risk_level"].unique()),
-#     default=sorted(df["risk_level"].unique())
-# )
-
 if isinstance(date_range, tuple) and len(date_range) == 2:
     start_date, end_date = date_range
 else:
@@ -553,7 +584,6 @@ else:
 filtered_df = df[
     (df["state"].isin(state_filter)) &
     (df["product_category"].isin(category_filter)) &
-    # (df["risk_level"].isin(risk_filter)) &
     (df["payment_method"].isin(payment_filter)) &
     (df["recommended_action"].isin(action_filter)) &
     (df["priority_tier"].isin(priority_filter)) &
@@ -583,12 +613,13 @@ top_state = safe_top_index(
 
 st.markdown(f"""
 <div class="hero-box">
-    <div style="font-size:1.15rem; font-weight:700;">Merchant Risk + Action Summary</div>
+    <div style="font-size:1.2rem; font-weight:700;">Risk Intelligence Summary</div>
     <div style="margin-top:0.45rem;">
         <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged high risk, with
-        <b>{format_currency(metrics["revenue_at_risk"])}</b> in revenue at risk.
+        <b>{format_currency(metrics["revenue_at_risk"])}</b> currently at risk and
+        <b>{format_currency(metrics["protected_revenue"])}</b> already protected across closed flagged cases.
         There are <b>{metrics["critical_cases"]:,}</b> critical-priority cases.
-        Return pressure is highest in <b>{top_category}</b>, and fraud pressure is strongest in
+        Return-abuse pressure is highest in <b>{top_category}</b>, and fraud pressure is strongest in
         <b>{top_state}</b>.
     </div>
 </div>
@@ -635,8 +666,9 @@ with tab1:
         )
 
     loss_exposure = (
-        filtered_df[filtered_df["risk_type"].isin(["Fraud", "Returns"])]
-        .groupby("risk_type", as_index=False)["order_value"]
+        filtered_df[filtered_df["risk_type_display"].isin(
+            ["Fraud", "Return Abuse"])]
+        .groupby("risk_type_display", as_index=False)["order_value"]
         .sum()
         .sort_values("order_value", ascending=False)
     )
@@ -645,7 +677,7 @@ with tab1:
         col2.info("No loss exposure data available for the selected filters.")
     else:
         col2.plotly_chart(
-            px.bar(loss_exposure, x="risk_type", y="order_value",
+            px.bar(loss_exposure, x="risk_type_display", y="order_value",
                    title="Loss Exposure by Risk Type"),
             use_container_width=True
         )
@@ -697,7 +729,7 @@ with tab1:
 
 with tab2:
     st.subheader("FraudIQ")
-    fraud_df = filtered_df[filtered_df["risk_type"] == "Fraud"].copy()
+    fraud_df = filtered_df[filtered_df["risk_type_display"] == "Fraud"].copy()
 
     if fraud_df.empty:
         st.warning(
@@ -759,7 +791,8 @@ with tab2:
 
 with tab3:
     st.subheader("ReturnIQ")
-    returns_df = filtered_df[filtered_df["risk_type"] == "Returns"].copy()
+    returns_df = filtered_df[filtered_df["risk_type_display"]
+                             == "Return Abuse"].copy()
 
     if returns_df.empty:
         st.warning(
@@ -847,11 +880,17 @@ with tab4:
     kc1, kc2, kc3, kc4 = st.columns(4)
     kc1.metric("Open Flagged Cases", f"{len(open_flagged_cases):,}")
     kc2.metric("Closed Flagged Cases", f"{len(closed_flagged_cases):,}")
-    kc3.metric("Potential Loss Prevented",
-               format_currency(potential_loss_prevented))
+    kc3.metric("Protected Revenue", format_currency(potential_loss_prevented))
     kc4.metric("Closure Rate", f"{closure_rate:.1f}%")
 
-    st.markdown("---")
+    st.markdown(f"""
+    <div class="section-note">
+        <b>Outcome Summary:</b> The current filtered view shows
+        <b>{len(closed_flagged_cases):,}</b> resolved flagged cases protecting
+        <b>{format_currency(potential_loss_prevented)}</b> in revenue, while
+        <b>{len(open_flagged_cases):,}</b> flagged cases remain active for review.
+    </div>
+    """, unsafe_allow_html=True)
 
     ac1, ac2 = st.columns(2)
 
@@ -906,11 +945,13 @@ with tab4:
     st.markdown("### Sample Agent-Ready Action Queue")
     action_queue = filtered_df[
         [
-            "order_id", "customer_id", "risk_type", "priority_tier", "case_status",
+            "order_id", "customer_id", "risk_type_display", "priority_tier", "case_status",
             "workflow_stage", "recommended_action", "ai_agent_next_step", "action_owner",
             "automation_level", "risk_reason_summary", "order_value", "unified_risk_score"
         ]
-    ].sort_values(["unified_risk_score", "order_value"], ascending=[False, False]).head(50)
+    ].rename(columns={"risk_type_display": "risk_type"}).sort_values(
+        ["unified_risk_score", "order_value"], ascending=[False, False]
+    ).head(50)
 
     st.dataframe(
         action_queue.style.format({
@@ -926,11 +967,13 @@ with tab4:
     else:
         resolved_view = closed_flagged_cases[
             [
-                "order_id", "customer_id", "order_date", "risk_type", "priority_tier",
+                "order_id", "customer_id", "order_date", "risk_type_display", "priority_tier",
                 "recommended_action", "workflow_stage", "order_value",
                 "unified_risk_score", "risk_reason_summary", "action_owner"
             ]
-        ].sort_values(["unified_risk_score", "order_value"], ascending=[False, False]).head(50)
+        ].rename(columns={"risk_type_display": "risk_type"}).sort_values(
+            ["unified_risk_score", "order_value"], ascending=[False, False]
+        ).head(50)
 
         st.dataframe(
             resolved_view.style.format({
@@ -970,13 +1013,14 @@ with tab5:
     qc1.download_button(
         label="Download Open Cases CSV",
         data=to_csv_download(flagged_df.drop(
-            columns=["priority_sort"], errors="ignore")),
+            columns=["priority_sort", "risk_type_display"], errors="ignore")),
         file_name="aignita_open_cases.csv",
         mime="text/csv"
     )
     qc2.download_button(
         label="Download Filtered Dataset CSV",
-        data=to_csv_download(filtered_df),
+        data=to_csv_download(filtered_df.drop(
+            columns=["risk_type_display"], errors="ignore")),
         file_name="aignita_filtered_dataset.csv",
         mime="text/csv"
     )
@@ -989,11 +1033,11 @@ with tab5:
                 "order_id", "customer_id", "order_date", "product_category", "product_name",
                 "country", "state", "payment_method", "order_value",
                 "fraud_score", "return_abuse_score", "unified_risk_score",
-                "risk_type", "priority_tier", "case_status", "workflow_stage",
+                "risk_type_display", "priority_tier", "case_status", "workflow_stage",
                 "risk_reason_summary", "recommended_action", "ai_agent_next_step",
                 "action_owner", "automation_level"
             ]
-        ].head(100)
+        ].rename(columns={"risk_type_display": "risk_type"}).head(100)
 
         st.dataframe(
             open_case_view.style.format({
@@ -1031,7 +1075,7 @@ with tab5:
             </div>
             <div><b>Customer ID:</b> {selected_case["customer_id"]}</div>
             <div><b>Order Date:</b> {pd.to_datetime(selected_case["order_date"]).date()}</div>
-            <div><b>Risk Type:</b> {selected_case["risk_type"]}</div>
+            <div><b>Risk Type:</b> {selected_case["risk_type_display"]}</div>
             <div><b>Product:</b> {selected_case["product_name"]} ({selected_case["product_category"]})</div>
             <div><b>Location:</b> {selected_case["state"]}, {selected_case["country"]}</div>
             <div><b>Payment Method:</b> {selected_case["payment_method"]}</div>
@@ -1165,6 +1209,7 @@ insight_text = f"""
 - **{metrics["flagged_pct"]:.1f}%** of filtered orders are flagged high risk.
 - **{metrics["critical_cases"]:,}** cases are currently marked **Critical** and should be handled first.
 - **{metrics["open_cases"]:,}** cases are currently open, while **{metrics["closed_cases"]:,}** have already been resolved.
+- **{format_currency(metrics["protected_revenue"])}** in revenue has already been protected across closed flagged cases.
 - **{top_category}** is the strongest return-abuse category.
 - **{top_state}** has the highest average fraud score.
 """

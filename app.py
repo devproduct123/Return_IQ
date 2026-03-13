@@ -38,6 +38,13 @@ st.markdown("""
         margin-bottom: 0.8rem;
         background: rgba(250,250,250,0.02);
     }
+    .case-signal-box {
+        padding: 0.9rem 1rem;
+        border: 1px solid rgba(120,120,120,0.14);
+        border-radius: 12px;
+        margin-top: 0.8rem;
+        background: rgba(250,250,250,0.02);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,7 +79,6 @@ def load_data():
     df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce")
     df = df.dropna(subset=["order_date"])
 
-    # Normalize naming without forcing immediate dataset regeneration
     df["risk_type_display"] = df["risk_type"].replace({
         "Returns": "Return Abuse"
     })
@@ -299,6 +305,82 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
     )
 
 
+def answer_case_question(question: str, case_row: pd.Series | None) -> str:
+    if case_row is None:
+        return "No case is selected. Please select an order in Ops Queue first."
+
+    q = question.lower().strip()
+
+    order_id = case_row["order_id"]
+    risk_type = case_row["risk_type_display"]
+    priority = case_row["priority_tier"]
+    case_status = case_row["case_status"]
+    workflow_stage = case_row["workflow_stage"]
+    recommended_action = case_row["recommended_action"]
+    next_step = case_row["ai_agent_next_step"]
+    risk_reason = case_row["risk_reason_summary"]
+    fraud_score = float(case_row["fraud_score"])
+    return_score = float(case_row["return_abuse_score"])
+    unified_score = float(case_row["unified_risk_score"])
+    order_value = float(case_row["order_value"])
+    past_returns = int(case_row["past_returns"])
+    chargeback_history = int(case_row["chargeback_history"])
+    payment_method = case_row["payment_method"]
+    product_name = case_row["product_name"]
+    product_category = case_row["product_category"]
+    state = case_row["state"]
+    country = case_row["country"]
+
+    if "summary" in q or "summarize" in q or "case" in q:
+        return (
+            f"Order {order_id} is a {priority}-priority {risk_type} case with status {case_status}. "
+            f"The order value is {format_currency(order_value)}, unified risk score is {unified_score:.3f}, "
+            f"and the current workflow stage is {workflow_stage}. "
+            f"Recommended action is {recommended_action}. Main reason flagged: {risk_reason}"
+        )
+
+    if "why" in q or "flagged" in q or "reason" in q:
+        return (
+            f"This case was flagged as {risk_type}. "
+            f"Fraud score is {fraud_score:.3f}, return-abuse score is {return_score:.3f}, "
+            f"and unified risk score is {unified_score:.3f}. "
+            f"Primary reason: {risk_reason}"
+        )
+
+    if "next step" in q or "what should i do" in q or "action" in q or "review first" in q:
+        return (
+            f"The recommended action for order {order_id} is {recommended_action}. "
+            f"The suggested next step is: {next_step}. "
+            f"Current stage is {workflow_stage}, so the analyst should align the next review step with that stage."
+        )
+
+    if "fraud" in q:
+        return (
+            f"Fraud score for order {order_id} is {fraud_score:.3f}. "
+            f"Payment method is {payment_method}, and the order location is {state}, {country}."
+        )
+
+    if "return" in q:
+        return (
+            f"Return-abuse score for order {order_id} is {return_score:.3f}. "
+            f"The product is {product_name} in category {product_category}, and the customer has {past_returns} past returns."
+        )
+
+    if "chargeback" in q:
+        return f"The customer has {chargeback_history} prior chargebacks associated with this case."
+
+    if "customer" in q or "verification" in q:
+        return (
+            f"For this case, a reasonable analyst path is to use the recommended action '{recommended_action}' "
+            f"and the AI next step '{next_step}' while requesting only the minimum required customer verification."
+        )
+
+    return (
+        f"I can help explain why order {order_id} was flagged, summarize the case, recommend the next step, "
+        f"or answer questions about fraud signals, return-abuse signals, verification, and escalation."
+    )
+
+
 def build_dashboard_context(data: pd.DataFrame) -> str:
     if data.empty:
         return "No dashboard data available."
@@ -444,7 +526,32 @@ Merchant Question:
     return ask_groq(user_prompt, system_prompt, max_tokens=500)
 
 
-def generate_agent_artifact(
+def ask_case_copilot(question: str, selected_case: pd.Series | None) -> str:
+    case_context = build_case_context(selected_case)
+
+    system_prompt = """
+You are Aignita RiskIQ Case Analyst Assistant.
+
+You help fraud and risk analysts investigate a selected case.
+
+Rules:
+- Only use the supplied case context.
+- Be concise and operational.
+- Focus on what the analyst should understand and do next.
+- Do not invent evidence not present in the context.
+"""
+
+    user_prompt = f"""
+Selected Case Context:
+{case_context}
+
+Analyst Question:
+{question}
+"""
+    return ask_groq(user_prompt, system_prompt, max_tokens=400)
+
+
+def generate_ai_output(
     artifact_type: str,
     dashboard_data: pd.DataFrame,
     selected_case: pd.Series | None = None
@@ -453,7 +560,7 @@ def generate_agent_artifact(
     case_context = build_case_context(selected_case)
 
     system_prompt = """
-You are Aignita RiskIQ Agent Studio.
+You are Aignita RiskIQ Copilot.
 
 Generate practical outputs for risk and operations teams.
 Ground everything in the supplied context.
@@ -471,12 +578,6 @@ Include:
 - what should be prioritized next
 Use plain business language.
 """,
-        "customer_verification_draft": """
-Draft a customer verification message for the selected case.
-Tone: polite, professional, non-accusatory.
-Ask for only the minimum needed verification.
-If no selected case exists, say that a selected case is required.
-""",
         "policy_recommendation": """
 Write a short policy recommendation memo for the merchant based on the dashboard context.
 Focus on return-abuse and fraud controls.
@@ -485,13 +586,19 @@ Include:
 - expected benefit
 - possible tradeoff
 """,
+        "customer_verification_draft": """
+Draft a customer verification message for the selected case.
+Tone: polite, professional, non-accusatory.
+Ask for only the minimum needed verification.
+If no selected case exists, say that a selected case is required.
+""",
         "ops_action_plan": """
-Create a short ops action plan for today's risk team.
+Create a short ops action plan for the selected case.
 Include:
-- what to review first
-- what to defer
-- what can be automated
-Use bullet points.
+- what the analyst should review first
+- what evidence matters most
+- whether the case should be escalated, verified, monitored, or closed
+Keep it practical and concise.
 """,
     }
 
@@ -515,14 +622,18 @@ except Exception as e:
     st.stop()
 
 st.title("Aignita RiskIQ")
-st.caption("AI-Powered Risk Intelligence and Action Orchestration for E-commerce")
+st.caption(
+    "AI-powered fraud, return-abuse, and risk operations intelligence for e-commerce merchants")
 
 if df is None:
     st.error("data/transactions.csv not found.")
     st.code("python generate_data.py")
     st.stop()
 
+st.info("Demo note: This prototype uses simulated e-commerce transaction data to illustrate fraud, return-abuse, and risk operations workflows.")
+
 st.sidebar.header("Filters")
+st.sidebar.caption("Filters apply across all tabs and AI outputs.")
 
 date_min = df["order_date"].min().date()
 date_max = df["order_date"].max().date()
@@ -636,7 +747,8 @@ c6.metric("Revenue at Risk", format_currency(metrics["revenue_at_risk"]))
 st.markdown("---")
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["Overview", "FraudIQ", "ReturnIQ", "Action Center", "Ops Queue", "AI Copilot"]
+    ["Overview", "FraudIQ", "ReturnIQ",
+        "Action Center", "Ops Queue", "AI Risk Copilot"]
 )
 
 with tab1:
@@ -677,8 +789,8 @@ with tab1:
         col2.info("No loss exposure data available for the selected filters.")
     else:
         col2.plotly_chart(
-            px.bar(loss_exposure, x="risk_type_display", y="order_value",
-                   title="Loss Exposure by Risk Type"),
+            px.bar(loss_exposure, x="risk_type_display",
+                   y="order_value", title="Loss Exposure by Risk Type"),
             use_container_width=True
         )
 
@@ -933,7 +1045,7 @@ with tab4:
             use_container_width=True
         )
 
-        st.markdown("### AI Agent Workflow Recommendations")
+        st.markdown("### AI Workflow Recommendations")
         st.dataframe(
             action_summary.style.format({
                 "revenue": "${:,.2f}",
@@ -942,7 +1054,7 @@ with tab4:
             use_container_width=True
         )
 
-    st.markdown("### Sample Agent-Ready Action Queue")
+    st.markdown("### Sample Action Queue")
     action_queue = filtered_df[
         [
             "order_id", "customer_id", "risk_type_display", "priority_tier", "case_status",
@@ -1082,47 +1194,126 @@ with tab5:
             <div><b>Workflow Stage:</b> {selected_case["workflow_stage"]}</div>
             <div><b>Recommended Action:</b> {selected_case["recommended_action"]}</div>
             <div><b>Action Owner:</b> {selected_case["action_owner"]}</div>
-            <div><b>Automation Level:</b> {selected_case["automation_level"]}</div>
+            <div><b>Handling Mode:</b> {selected_case["automation_level"]}</div>
             <div style="margin-top:0.7rem;"><b>Why this was flagged:</b> {selected_case["risk_reason_summary"]}</div>
-            <div style="margin-top:0.5rem;"><b>AI Agent Next Step:</b> {selected_case["ai_agent_next_step"]}</div>
+            <div style="margin-top:0.5rem;"><b>AI Suggested Next Step:</b> {selected_case["ai_agent_next_step"]}</div>
         </div>
         """, unsafe_allow_html=True)
+
+        st.markdown("#### Key Risk Signals")
+        signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(
+            5)
+        signal_col1.metric(
+            "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
+        signal_col2.metric("Return Abuse Score",
+                           f'{float(selected_case["return_abuse_score"]):.3f}')
+        signal_col3.metric("Unified Risk Score",
+                           f'{float(selected_case["unified_risk_score"]):.3f}')
+        signal_col4.metric(
+            "Past Returns", f'{int(selected_case["past_returns"])}')
+        signal_col5.metric("Chargeback History",
+                           f'{int(selected_case["chargeback_history"])}')
 
         timeline_steps = build_case_timeline(selected_case)
         components.html(render_timeline_html(timeline_steps),
                         height=190, scrolling=False)
 
-        st.markdown("#### Risk Signals")
-        signal_col1, signal_col2, signal_col3, signal_col4 = st.columns(4)
-        signal_col1.metric(
-            "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
-        signal_col2.metric("Return Abuse Score",
-                           f'{float(selected_case["return_abuse_score"]):.3f}')
-        signal_col3.metric(
-            "Past Returns", f'{int(selected_case["past_returns"])}')
-        signal_col4.metric("Chargeback History",
-                           f'{int(selected_case["chargeback_history"])}')
+        st.markdown("---")
+        st.markdown("### Ask About This Case")
+        st.caption("Let analysts ask focused questions about the selected case.")
+
+        case_sample_cols = st.columns(3)
+        if case_sample_cols[0].button("Why was this case flagged?"):
+            st.session_state["case_question"] = "Why was this case flagged?"
+        if case_sample_cols[1].button("What should I do next?"):
+            st.session_state["case_question"] = "What should I do next on this case?"
+        if case_sample_cols[2].button("Is verification needed?"):
+            st.session_state["case_question"] = "Is customer verification needed for this case?"
+
+        case_sample_cols2 = st.columns(3)
+        if case_sample_cols2[0].button("Summarize this case"):
+            st.session_state["case_question"] = "Summarize this case."
+        if case_sample_cols2[1].button("Explain fraud signals"):
+            st.session_state["case_question"] = "Explain the fraud signals in this case."
+        if case_sample_cols2[2].button("Explain return-abuse signals"):
+            st.session_state["case_question"] = "Explain the return-abuse signals in this case."
+
+        case_question = st.text_input(
+            "Ask about the selected case",
+            value=st.session_state.get("case_question", "")
+        )
+
+        case_mode = st.radio(
+            "Case Response Mode",
+            ["AI Analyst", "Quick Case Insights"],
+            horizontal=True,
+            key="case_mode_radio"
+        )
+
+        if not GROQ_API_KEY:
+            st.caption(
+                "AI Analyst mode requires a configured GROQ_API_KEY. Quick Case Insights works without it.")
+
+        if case_question:
+            with st.spinner("Analyzing selected case..."):
+                if case_mode == "AI Analyst":
+                    case_answer = ask_case_copilot(
+                        case_question, selected_case)
+                else:
+                    case_answer = answer_case_question(
+                        case_question, selected_case)
+
+            st.markdown("#### Case Answer")
+            st.info(case_answer)
+
+        st.markdown("---")
+        st.markdown("### Case Action Assistant")
+        st.caption("Create analyst-ready outputs based on the selected case.")
+
+        ops_col1, ops_col2 = st.columns(2)
+
+        with ops_col1:
+            if st.button("Draft Customer Verification Message"):
+                with st.spinner("Generating verification draft..."):
+                    st.session_state["case_output"] = generate_ai_output(
+                        "customer_verification_draft",
+                        filtered_df,
+                        selected_case
+                    )
+
+        with ops_col2:
+            if st.button("Create Ops Action Plan"):
+                with st.spinner("Generating ops plan..."):
+                    st.session_state["case_output"] = generate_ai_output(
+                        "ops_action_plan",
+                        filtered_df,
+                        selected_case
+                    )
+
+        if "case_output" in st.session_state and st.session_state["case_output"]:
+            st.markdown("#### Generated Case Output")
+            st.write(st.session_state["case_output"])
 
 with tab6:
     st.subheader("AI Risk Copilot")
-    st.markdown(
-        "Ask questions about the **dashboard risk trends or the selected case**.")
+    st.markdown("Use Copilot to **ask broader portfolio questions** and **generate strategic outputs** for merchant and policy workflows.")
 
+    st.markdown("### Ask Copilot")
     sample_cols = st.columns(3)
     if sample_cols[0].button("Summarize current risk"):
         st.session_state["copilot_question"] = "Summarize the current risk situation."
     if sample_cols[1].button("What should ops review first?"):
         st.session_state["copilot_question"] = "What should the ops team review first?"
-    if sample_cols[2].button("Explain the selected case"):
-        st.session_state["copilot_question"] = "Explain why this order was flagged."
+    if sample_cols[2].button("Top fraud locations"):
+        st.session_state["copilot_question"] = "Which states have the highest fraud risk?"
 
     sample_cols2 = st.columns(3)
-    if sample_cols2[0].button("Top fraud locations"):
-        st.session_state["copilot_question"] = "Which states have the highest fraud risk?"
-    if sample_cols2[1].button("Return abuse drivers"):
+    if sample_cols2[0].button("Return abuse drivers"):
         st.session_state["copilot_question"] = "Which categories are driving return abuse?"
-    if sample_cols2[2].button("Recommended actions"):
+    if sample_cols2[1].button("Recommended actions"):
         st.session_state["copilot_question"] = "What actions should the ops team prioritize?"
+    if sample_cols2[2].button("Revenue at risk"):
+        st.session_state["copilot_question"] = "How much revenue is at risk right now?"
 
     question = st.text_input(
         "Ask Aignita Copilot",
@@ -1130,13 +1321,18 @@ with tab6:
     )
 
     copilot_mode = st.radio(
-        "Copilot Mode",
-        ["LLM", "Rule-based"],
+        "Response Mode",
+        ["AI Copilot", "Quick Insights"],
         horizontal=True
     )
 
+    if not GROQ_API_KEY:
+        st.caption(
+            "AI Copilot mode requires a configured GROQ_API_KEY. Quick Insights works without it.")
+
     if question:
         selected_case_for_ai = st.session_state.get("selected_case", None)
+        used_fallback_case = False
 
         if selected_case_for_ai is None:
             fallback_cases = filtered_df[
@@ -1152,9 +1348,13 @@ with tab6:
                     ascending=[True, False, False]
                 )
                 selected_case_for_ai = fallback_cases.iloc[0]
+                used_fallback_case = True
+
+        if used_fallback_case:
+            st.info("No case was manually selected in Ops Queue. Copilot is using the highest-priority open case from the current filters.")
 
         with st.spinner("Copilot thinking..."):
-            if copilot_mode == "LLM":
+            if copilot_mode == "AI Copilot":
                 answer = ask_risk_copilot(
                     question, filtered_df, selected_case_for_ai)
             else:
@@ -1163,44 +1363,33 @@ with tab6:
         st.markdown("### Copilot Answer")
         st.info(answer)
 
-    st.markdown("### Agent Studio")
+    st.markdown("---")
+    st.markdown("### Generate Strategic Outputs")
+    st.caption(
+        "Create merchant-facing and policy-oriented outputs from the current dashboard view.")
 
     ag1, ag2 = st.columns(2)
     with ag1:
         if st.button("Generate Merchant Summary"):
-            with st.spinner("Generating..."):
-                st.session_state["agent_output"] = generate_agent_artifact(
+            with st.spinner("Generating merchant summary..."):
+                st.session_state["strategic_output"] = generate_ai_output(
                     "merchant_summary",
-                    filtered_df,
-                    st.session_state.get("selected_case", None)
-                )
-        if st.button("Draft Customer Verification Message"):
-            with st.spinner("Generating..."):
-                st.session_state["agent_output"] = generate_agent_artifact(
-                    "customer_verification_draft",
                     filtered_df,
                     st.session_state.get("selected_case", None)
                 )
 
     with ag2:
         if st.button("Generate Policy Recommendation"):
-            with st.spinner("Generating..."):
-                st.session_state["agent_output"] = generate_agent_artifact(
+            with st.spinner("Generating policy recommendation..."):
+                st.session_state["strategic_output"] = generate_ai_output(
                     "policy_recommendation",
                     filtered_df,
                     st.session_state.get("selected_case", None)
                 )
-        if st.button("Create Ops Action Plan"):
-            with st.spinner("Generating..."):
-                st.session_state["agent_output"] = generate_agent_artifact(
-                    "ops_action_plan",
-                    filtered_df,
-                    st.session_state.get("selected_case", None)
-                )
 
-    if "agent_output" in st.session_state and st.session_state["agent_output"]:
-        st.markdown("### Agent Output")
-        st.write(st.session_state["agent_output"])
+    if "strategic_output" in st.session_state and st.session_state["strategic_output"]:
+        st.markdown("### Generated Strategic Output")
+        st.write(st.session_state["strategic_output"])
 
 st.markdown("---")
 st.subheader("AI Risk Insights")
@@ -1215,6 +1404,12 @@ insight_text = f"""
 """
 
 st.info(insight_text)
+
+st.markdown("""
+<div class="section-note">
+    <b>Pilot with Aignita:</b> Interested in using RiskIQ for your store or risk operations workflow? Reach out to discuss a pilot or custom implementation.
+</div>
+""", unsafe_allow_html=True)
 
 with st.expander("Show raw filtered data"):
     st.dataframe(filtered_df.head(200), use_container_width=True)
