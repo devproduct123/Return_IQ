@@ -86,6 +86,75 @@ def assign_actions(risk_level, risk_type, fraud_score, return_abuse_score, order
     }
 
 
+def build_risk_reason_summary(risk_type, category, state, order_value, past_returns, past_orders,
+                              chargeback_history, expedited_shipping, discount_used,
+                              fraud_score, return_abuse_score):
+    reasons = []
+
+    if risk_type == "Fraud":
+        if chargeback_history > 0:
+            reasons.append(f"{chargeback_history} prior chargeback signal(s)")
+        if state in ["FL", "NJ"]:
+            reasons.append(f"elevated-risk geography: {state}")
+        if order_value >= 250:
+            reasons.append("high-value order")
+        if expedited_shipping == 1:
+            reasons.append("expedited shipping pattern")
+        if fraud_score >= 0.70:
+            reasons.append("very high fraud score")
+
+    elif risk_type == "Returns":
+        return_rate = past_returns / max(past_orders, 1)
+        if category == "Apparel":
+            reasons.append("apparel return-abuse pattern")
+        if category == "Footwear":
+            reasons.append("footwear return pressure")
+        if past_returns >= 3:
+            reasons.append(
+                f"repeat returner with {past_returns} historical returns")
+        if return_rate >= 0.35:
+            reasons.append(f"high historical return rate ({return_rate:.0%})")
+        if discount_used == 1:
+            reasons.append("discount-driven purchase behavior")
+        if return_abuse_score >= 0.65:
+            reasons.append("elevated return-abuse score")
+
+    if not reasons:
+        reasons.append("standard low-risk profile")
+
+    return " | ".join(reasons[:3])
+
+
+def assign_priority_tier(risk_level, risk_type, fraud_score, return_abuse_score, order_value):
+    if risk_level == "Low":
+        return "Low"
+
+    max_score = max(fraud_score, return_abuse_score)
+
+    if max_score >= 0.78 or order_value >= 300:
+        return "Critical"
+    if max_score >= 0.60:
+        return "High"
+    return "Moderate"
+
+
+def assign_workflow_status(risk_level, recommended_action, automation_level):
+    if risk_level == "Low":
+        return "Auto Approved"
+
+    mapping = {
+        "Hold Fulfillment": ["Awaiting Verification", "Review Queue", "Action Applied"],
+        "Verify Customer": ["Verification Sent", "Awaiting Customer Response", "Review Queue"],
+        "Restrict Return / Refund": ["Policy Applied", "Review Queue", "Awaiting Item Inspection"],
+        "Review Return Behavior": ["Watchlist Monitoring", "Review Queue", "Case Open"],
+        "Escalate for Investigation": ["Escalated", "Senior Review", "Case Open"],
+        "Allow": ["Closed", "Auto Approved"]
+    }
+
+    options = mapping.get(recommended_action, ["Case Open", "Review Queue"])
+    return random.choice(options)
+
+
 for i in range(n):
     order_id = f"O{i+1:05d}"
     customer_id = f"C{np.random.randint(1000, 3000)}"
@@ -106,7 +175,6 @@ for i in range(n):
     discount_used = np.random.choice([0, 1], p=[0.65, 0.35])
     expedited_shipping = np.random.choice([0, 1], p=[0.78, 0.22])
 
-    # Lower fraud prevalence
     suspicious_fraud = (
         (state in ["FL", "NJ"]) and
         (order_value > 280 or expedited_shipping == 1 or chargeback_history > 0)
@@ -122,7 +190,6 @@ for i in range(n):
         + np.random.normal(0, 0.04)
     )
 
-    # Higher return-abuse prevalence
     suspicious_return = (
         (category == "Apparel") and
         (past_returns >= 2 or (past_returns / max(past_orders, 1)) > 0.35)
@@ -141,7 +208,6 @@ for i in range(n):
     fraud_score = float(np.clip(fraud_score, 0, 1))
     return_abuse_score = float(np.clip(return_abuse_score, 0, 1))
 
-    # Controlled class assignment to hit desired mix
     if fraud_score >= 0.42:
         risk_level = "High"
         risk_type = "Fraud"
@@ -162,6 +228,34 @@ for i in range(n):
         order_value=order_value,
         past_returns=past_returns,
         chargeback_history=chargeback_history
+    )
+
+    risk_reason_summary = build_risk_reason_summary(
+        risk_type=risk_type,
+        category=category,
+        state=state,
+        order_value=order_value,
+        past_returns=past_returns,
+        past_orders=past_orders,
+        chargeback_history=chargeback_history,
+        expedited_shipping=expedited_shipping,
+        discount_used=discount_used,
+        fraud_score=fraud_score,
+        return_abuse_score=return_abuse_score
+    )
+
+    priority_tier = assign_priority_tier(
+        risk_level=risk_level,
+        risk_type=risk_type,
+        fraud_score=fraud_score,
+        return_abuse_score=return_abuse_score,
+        order_value=order_value
+    )
+
+    workflow_status = assign_workflow_status(
+        risk_level=risk_level,
+        recommended_action=action_info["recommended_action"],
+        automation_level=action_info["automation_level"]
     )
 
     data.append({
@@ -187,7 +281,10 @@ for i in range(n):
         "recommended_action": action_info["recommended_action"],
         "ai_agent_next_step": action_info["ai_agent_next_step"],
         "action_owner": action_info["action_owner"],
-        "automation_level": action_info["automation_level"]
+        "automation_level": action_info["automation_level"],
+        "risk_reason_summary": risk_reason_summary,
+        "priority_tier": priority_tier,
+        "workflow_status": workflow_status
     })
 
 df = pd.DataFrame(data)
@@ -197,11 +294,18 @@ df.to_csv("data/transactions.csv", index=False)
 
 print("\nRisk Level Distribution:")
 print(df["risk_level"].value_counts())
+
 print("\nRisk Type Distribution:")
 print(df["risk_type"].value_counts())
+
 print("\nRisk Type %:")
 print((df["risk_type"].value_counts(normalize=True) * 100).round(2))
-print("\nRecommended Action Distribution:")
-print(df["recommended_action"].value_counts())
+
+print("\nPriority Tier Distribution:")
+print(df["priority_tier"].value_counts())
+
+print("\nWorkflow Status Distribution:")
+print(df["workflow_status"].value_counts())
+
 print("\nDataset created: data/transactions.csv")
 print(df.head())

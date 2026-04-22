@@ -26,6 +26,54 @@ states = ["CA", "NY", "TX", "FL", "WA", "NJ", "IL", "GA"]
 start_date = datetime(2025, 1, 1)
 data = []
 
+STAGE_MAP = {
+    "Hold Fulfillment": [
+        "Case Created",
+        "Review Queue",
+        "Verification Sent",
+        "Awaiting Customer Response",
+        "Action Applied",
+        "Resolved",
+    ],
+    "Verify Customer": [
+        "Case Created",
+        "Review Queue",
+        "Verification Sent",
+        "Awaiting Customer Response",
+        "Action Applied",
+        "Resolved",
+    ],
+    "Restrict Return / Refund": [
+        "Case Created",
+        "Review Queue",
+        "Policy Applied",
+        "Awaiting Item Inspection",
+        "Action Applied",
+        "Resolved",
+    ],
+    "Review Return Behavior": [
+        "Case Created",
+        "Review Queue",
+        "Watchlist Monitoring",
+        "Policy Applied",
+        "Action Applied",
+        "Resolved",
+    ],
+    "Escalate for Investigation": [
+        "Case Created",
+        "Escalated",
+        "Senior Review",
+        "Action Applied",
+        "Resolved",
+    ],
+    "Allow": [
+        "Auto Approved",
+        "Resolved",
+    ],
+}
+
+PENDING_STAGES = {"Awaiting Customer Response", "Awaiting Item Inspection"}
+
 
 def assign_actions(
     risk_level: str,
@@ -171,22 +219,40 @@ def assign_priority_tier(
     return "Low"
 
 
-def assign_case_status_and_stage(risk_level: str, recommended_action: str):
-    if risk_level == "Low":
-        return "Closed", "Auto Approved"
+def derive_case_status(workflow_stage: str) -> str:
+    if workflow_stage == "Resolved":
+        return "Closed"
+    if workflow_stage in PENDING_STAGES:
+        return "Pending"
+    return "Open"
 
-    stage_map = {
-        "Hold Fulfillment": ["Review Queue", "Verification Sent", "Awaiting Customer Response", "Action Applied"],
-        "Verify Customer": ["Verification Sent", "Awaiting Customer Response", "Review Queue", "Action Applied"],
-        "Restrict Return / Refund": ["Review Queue", "Policy Applied", "Awaiting Item Inspection", "Action Applied"],
-        "Review Return Behavior": ["Review Queue", "Watchlist Monitoring", "Policy Applied", "Action Applied"],
-        "Escalate for Investigation": ["Escalated", "Senior Review", "Action Applied"],
+
+def assign_case_status_and_stage(risk_level: str, recommended_action: str):
+    if risk_level == "Low" or recommended_action == "Allow":
+        return "Closed", "Resolved"
+
+    stages = STAGE_MAP.get(
+        recommended_action,
+        ["Case Created", "Review Queue", "Action Applied", "Resolved"]
+    )
+
+    # Heavier weight on earlier / in-progress stages so the dataset feels realistic
+    default_weights = {
+        4: np.array([0.45, 0.30, 0.18, 0.07]),
+        5: np.array([0.34, 0.26, 0.20, 0.14, 0.06]),
+        6: np.array([0.28, 0.22, 0.18, 0.14, 0.10, 0.08]),
     }
 
-    stages = stage_map.get(recommended_action, [
-                           "Review Queue", "Action Applied"])
-    workflow_stage = random.choice(stages)
-    case_status = "Closed" if workflow_stage == "Action Applied" else "Open"
+    weights = default_weights.get(len(stages))
+    if weights is None:
+        weights = np.ones(len(stages)) / len(stages)
+    else:
+        weights = weights / weights.sum()
+
+    idx = np.random.choice(len(stages), p=weights)
+    workflow_stage = stages[idx]
+    case_status = derive_case_status(workflow_stage)
+
     return case_status, workflow_stage
 
 

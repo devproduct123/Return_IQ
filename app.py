@@ -773,7 +773,8 @@ with tab1:
     else:
         col1.plotly_chart(
             px.line(trend_df, x="order_day", y="flagged_rate",
-                    title="Flagged Order Rate Over Time (%)"),
+                    title="Flagged Order Rate Over Time (%)",
+                    labels={"order_day": "Order Date", "flagged_rate": "Flagged Rate (%)"}),
             use_container_width=True
         )
 
@@ -790,7 +791,9 @@ with tab1:
     else:
         col2.plotly_chart(
             px.bar(loss_exposure, x="risk_type_display",
-                   y="order_value", title="Loss Exposure by Risk Type"),
+                   y="order_value",
+                   title="Loss Exposure by Risk Type",
+                   labels={"risk_type_display": "Risk Type", "order_value": "Loss Exposure ($)"}),
             use_container_width=True
         )
 
@@ -806,7 +809,8 @@ with tab1:
 
     col3.plotly_chart(
         px.bar(flagged_priority, x="priority_tier", y="count",
-               title="Flagged Cases by Risk Exposure Priority"),
+               title="Flagged Cases by Risk Exposure Priority",
+               labels={"priority_tier": "Priority Tier", "count": "Number of Cases"}),
         use_container_width=True
     )
 
@@ -819,7 +823,8 @@ with tab1:
     else:
         col4.plotly_chart(
             px.bar(action_dist, x="recommended_action",
-                   y="count", title="Recommended Actions"),
+                   y="count", title="Recommended Actions",
+                   labels={"recommended_action": "Recommended Action", "count": "Number of Cases"}),
             use_container_width=True
         )
 
@@ -835,7 +840,8 @@ with tab1:
     else:
         st.plotly_chart(
             px.bar(workflow_dist, x="workflow_stage",
-                   y="count", title="Workflow Stage Split"),
+                   y="count", title="Workflow Stage Split",
+                   labels={"workflow_stage": "Workflow Stage", "count": "Number of Cases"}),
             use_container_width=True
         )
 
@@ -875,12 +881,14 @@ with tab2:
 
         fcol1.plotly_chart(
             px.bar(fraud_by_state, x="state", y="fraud_score",
-                   title="Average Fraud Score by State"),
+                   title="Average Fraud Score by State",
+                   labels={"state": "State", "fraud_score": "Average Fraud Score"}),
             use_container_width=True
         )
         fcol2.plotly_chart(
             px.bar(fraud_by_payment, x="payment_method", y="fraud_score",
-                   title="Average Fraud Score by Payment Method"),
+                   title="Average Fraud Score by Payment Method",
+                   labels={"payment_method": "Payment Method", "fraud_score": "Average Fraud Score"}),
             use_container_width=True
         )
 
@@ -943,12 +951,14 @@ with tab3:
 
         rcol1.plotly_chart(
             px.bar(returns_by_category, x="product_category",
-                   y="return_abuse_score", title="Return Abuse Score by Category"),
+                   y="return_abuse_score", title="Return Abuse Score by Category",
+                     labels={"product_category": "Product Category", "return_abuse_score": "Average Return Abuse Score"}),
             use_container_width=True
         )
         rcol2.plotly_chart(
             px.bar(returns_by_product, x="product_name", y="return_abuse_score",
-                   title="Top Products by Return Abuse Score"),
+                   title="Top Products by Return Abuse Score",
+                   labels={"product_name": "Product Name", "return_abuse_score": "Average Return Abuse Score"}),
             use_container_width=True
         )
 
@@ -1029,7 +1039,9 @@ with tab4:
                 x="recommended_action",
                 y="orders",
                 color="automation_level",
-                title="Action Volume by Recommendation"
+                title="Action Volume by Recommendation",
+                labels={"recommended_action": "Recommended Action",
+                        "orders": "Number of Cases", "automation_level": "Automation Level"}
             ),
             use_container_width=True
         )
@@ -1040,7 +1052,9 @@ with tab4:
                 x="action_owner",
                 y="orders",
                 color="priority_tier",
-                title="Action Ownership by Priority"
+                title="Action Ownership by Priority",
+                labels={"action_owner": "Action Owner",
+                        "orders": "Number of Cases", "priority_tier": "Priority Tier"}
             ),
             use_container_width=True
         )
