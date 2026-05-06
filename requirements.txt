@@ -4,5 +4,5 @@ numpy
 plotly
 groq
 python-dotenv
-
+pytest
 

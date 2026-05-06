@@ -1,4 +1,7 @@
 import os
+import json
+import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
 import plotly.express as px
@@ -6,6 +9,29 @@ import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
 from dotenv import load_dotenv
+
+from src.data_loader import load_data as load_transactions_data
+from src.metrics import (
+    compute_summary_metrics,
+    format_currency,
+    safe_top_index,
+    to_csv_download,
+)
+from src.risk_logic import (
+    answer_case_question,
+    answer_risk_question,
+    build_case_timeline,
+    get_open_high_risk_cases,
+    select_fallback_case,
+    sort_cases_by_priority,
+)
+from src.ui_components import (
+    render_case_detail_box,
+    render_hero_summary,
+    render_insight_footer,
+    render_outcome_summary,
+    render_timeline_html,
+)
 
 st.set_page_config(page_title="Aignita RiskIQ", layout="wide")
 
@@ -53,332 +79,51 @@ GROQ_API_KEY = os.getenv(
     "GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", None)
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-REQUIRED_COLUMNS = [
-    "order_id", "customer_id", "order_date", "product_category", "product_name",
-    "payment_method", "country", "state", "order_value", "past_orders",
-    "past_returns", "chargeback_history", "discount_used", "expedited_shipping",
-    "fraud_score", "return_abuse_score", "unified_risk_score", "risk_level",
-    "risk_type", "recommended_action", "ai_agent_next_step", "action_owner",
-    "automation_level", "risk_reason_summary", "priority_tier", "case_status",
-    "workflow_stage"
-]
-
-
 @st.cache_data
 def load_data():
-    path = "data/transactions.csv"
-    if not os.path.exists(path):
-        return None
-
-    df = pd.read_csv(path)
-
-    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns in dataset: {missing}")
-
-    df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce")
-    df = df.dropna(subset=["order_date"])
-
-    df["risk_type_display"] = df["risk_type"].replace({
-        "Returns": "Return Abuse"
-    })
-
-    return df
+    return load_transactions_data()
 
 
-def to_csv_download(df: pd.DataFrame) -> bytes:
-    return df.to_csv(index=False).encode("utf-8")
+def get_session_id() -> str:
+    if "session_id" not in st.session_state:
+        st.session_state["session_id"] = str(uuid.uuid4())
+    return st.session_state["session_id"]
 
 
-def format_currency(x: float) -> str:
-    if x >= 1_000_000:
-        return f"${x / 1_000_000:.1f}M"
-    if x >= 1_000:
-        return f"${x / 1_000:.1f}K"
-    return f"${x:,.0f}"
+def get_user_id() -> str:
+    viewer_email = st.session_state.get("viewer_email", "").strip().lower()
+    return viewer_email if viewer_email else "anonymous"
 
 
-def safe_top_index(series: pd.Series, default: str = "N/A") -> str:
-    return series.index[0] if len(series) > 0 else default
-
-
-def compute_summary_metrics(data: pd.DataFrame):
-    total_orders = len(data)
-    flagged_orders = int((data["risk_level"] == "High").sum())
-    flagged_pct = round((flagged_orders / total_orders)
-                        * 100, 1) if total_orders else 0.0
-    fraud_cases = int((data["risk_type_display"] == "Fraud").sum())
-    return_cases = int((data["risk_type_display"] == "Return Abuse").sum())
-    revenue_at_risk = float(
-        data.loc[data["risk_level"] == "High", "order_value"].sum())
-    critical_cases = int((data["priority_tier"] == "Critical").sum())
-    open_cases = int((data["case_status"] == "Open").sum())
-    closed_cases = int((data["case_status"] == "Closed").sum())
-    protected_revenue = float(
-        data.loc[
-            (data["risk_level"] == "High") & (data["case_status"] == "Closed"),
-            "order_value"
-        ].sum()
-    )
-
-    return {
-        "total_orders": total_orders,
-        "flagged_orders": flagged_orders,
-        "flagged_pct": flagged_pct,
-        "fraud_cases": fraud_cases,
-        "return_cases": return_cases,
-        "revenue_at_risk": revenue_at_risk,
-        "critical_cases": critical_cases,
-        "open_cases": open_cases,
-        "closed_cases": closed_cases,
-        "protected_revenue": protected_revenue,
+def log_event(event_name: str, details: dict | None = None):
+    event = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "session_id": get_session_id(),
+        "user_id": get_user_id(),
+        "event": event_name,
+        "details": details or {}
     }
 
-
-def build_case_timeline(case_row: pd.Series):
-    current_stage = str(case_row["workflow_stage"])
-    recommended_action = str(case_row["recommended_action"])
-    case_status = str(case_row["case_status"])
-
-    steps = [("Case Created", "done")]
-
-    stage_map = {
-        "Verification Sent": "current",
-        "Awaiting Customer Response": "current",
-        "Review Queue": "current",
-        "Policy Applied": "current",
-        "Awaiting Item Inspection": "current",
-        "Escalated": "current",
-        "Senior Review": "current",
-        "Watchlist Monitoring": "current",
-        "Action Applied": "done",
-        "Auto Approved": "done",
-    }
-
-    steps.append((current_stage, stage_map.get(current_stage, "current")))
-
-    if recommended_action == "Allow":
-        action_label = "Auto Approval Completed"
-    else:
-        action_label = f"Action: {recommended_action}"
-
-    steps.append((action_label, "done" if case_status ==
-                 "Closed" else "current"))
-    final_label = "Resolved" if case_status == "Closed" else "Pending Resolution"
-    steps.append((final_label, "done" if case_status ==
-                 "Closed" else "pending"))
-
-    return steps
+    st.session_state.setdefault("event_log", []).append(event)
+    print(json.dumps(event))
 
 
-def render_timeline_html(steps):
-    status_styles = {
-        "done": "background:#dcfce7;color:#166534;border:1px solid #bbf7d0;",
-        "current": "background:#dbeafe;color:#1d4ed8;border:1px solid #bfdbfe;",
-        "pending": "background:#f3f4f6;color:#4b5563;border:1px solid #e5e7eb;",
-    }
-
-    parts = []
-    for i, (label, status) in enumerate(steps):
-        style = status_styles.get(status, status_styles["pending"])
-        parts.append(
-            f"""
-            <div style="display:flex;align-items:center;">
-                <div style="padding:8px 12px;border-radius:999px;{style}font-size:0.9rem;font-weight:600;white-space:nowrap;">
-                    {label}
-                </div>
-            </div>
-            """
-        )
-        if i < len(steps) - 1:
-            parts.append(
-                """<div style="font-size:1.2rem;color:#9ca3af;padding:0 6px;">→</div>""")
-
-    return f"""
-    <html>
-    <body style="margin:0;padding:0;font-family:Arial,sans-serif;background:transparent;">
-        <div style="padding:12px 14px;border:1px solid rgba(120,120,120,0.15);border-radius:12px;background:rgba(250,250,250,0.02);">
-            <div style="font-size:1rem;font-weight:700;margin-bottom:12px;">Case Timeline</div>
-            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;">
-                {''.join(parts)}
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+def log_once(key: str, event_name: str, details: dict | None = None):
+    if not st.session_state.get(key):
+        log_event(event_name, details)
+        st.session_state[key] = True
 
 
-def answer_risk_question(question: str, data: pd.DataFrame) -> str:
-    q = question.lower().strip()
-
-    if data.empty:
-        return "No data is available for the current filters."
-
-    total_orders = len(data)
-    flagged_orders = int((data["risk_level"] == "High").sum())
-    revenue_at_risk = float(
-        data.loc[data["risk_level"] == "High", "order_value"].sum())
-    open_cases = int((data["case_status"] == "Open").sum())
-    protected_revenue = float(
-        data.loc[
-            (data["risk_level"] == "High") & (data["case_status"] == "Closed"),
-            "order_value"
-        ].sum()
-    )
-    critical_open = data[
-        (data["priority_tier"] == "Critical") & (data["case_status"] == "Open")
-    ]
-
-    top_category = safe_top_index(
-        data.groupby("product_category")["return_abuse_score"]
-        .mean()
-        .sort_values(ascending=False)
-    )
-
-    top_state = safe_top_index(
-        data.groupby("state")["fraud_score"]
-        .mean()
-        .sort_values(ascending=False)
-    )
-
-    top_action = safe_top_index(data["recommended_action"].value_counts())
-
-    if "summary" in q or "summarize" in q or "overall" in q:
-        return (
-            f"In the current filtered view, {flagged_orders:,} out of {total_orders:,} orders are flagged high risk. "
-            f"Revenue at risk is {format_currency(revenue_at_risk)}. "
-            f"Protected revenue on closed flagged cases is {format_currency(protected_revenue)}. "
-            f"There are {open_cases:,} open cases. "
-            f"Return abuse is highest in {top_category}, fraud risk is strongest in {top_state}, "
-            f"and the most common recommended action is {top_action}."
-        )
-
-    if "return" in q and ("category" in q or "product" in q or "driver" in q):
-        top_return_products = (
-            data.groupby("product_name")["return_abuse_score"]
-            .mean()
-            .sort_values(ascending=False)
-            .head(3)
-            .index.tolist()
-        )
-        return (
-            f"The highest return-abuse category is {top_category}. "
-            f"Top products by return-abuse score are: {', '.join(top_return_products)}."
-        )
-
-    if "fraud" in q and ("state" in q or "where" in q or "location" in q):
-        top_fraud_states = (
-            data.groupby("state")["fraud_score"]
-            .mean()
-            .sort_values(ascending=False)
-            .head(3)
-            .index.tolist()
-        )
-        return f"The highest fraud-risk states in the current view are: {', '.join(top_fraud_states)}."
-
-    if "revenue" in q and "risk" in q:
-        return (
-            f"Revenue at risk in the current filtered view is {format_currency(revenue_at_risk)}. "
-            f"Protected revenue from closed flagged cases is {format_currency(protected_revenue)}."
-        )
-
-    if "priority" in q or "review first" in q or "what should i do first" in q:
-        if critical_open.empty:
-            return "There are no open critical cases in the current filtered view. The next priority is High-priority open cases."
-        return (
-            f"There are {len(critical_open):,} open critical cases that should be reviewed first. "
-            f"Focus on the highest-value orders with the highest unified risk scores."
-        )
-
-    if "action" in q or "recommended" in q:
-        action_counts = data["recommended_action"].value_counts().head(3)
-        action_text = ", ".join(
-            [f"{k} ({v})" for k, v in action_counts.items()])
-        return f"The top recommended actions in the current view are: {action_text}."
-
-    if "open case" in q or "open cases" in q:
-        return f"There are currently {open_cases:,} open cases in the filtered view."
-
-    return (
-        "I can help summarize current risk, identify top fraud states, top return-abuse categories or products, "
-        "revenue at risk, protected revenue, open cases, and what the ops team should prioritize first."
-    )
-
-
-def answer_case_question(question: str, case_row: pd.Series | None) -> str:
-    if case_row is None:
-        return "No case is selected. Please select an order in Ops Queue first."
-
-    q = question.lower().strip()
-
-    order_id = case_row["order_id"]
-    risk_type = case_row["risk_type_display"]
-    priority = case_row["priority_tier"]
-    case_status = case_row["case_status"]
-    workflow_stage = case_row["workflow_stage"]
-    recommended_action = case_row["recommended_action"]
-    next_step = case_row["ai_agent_next_step"]
-    risk_reason = case_row["risk_reason_summary"]
-    fraud_score = float(case_row["fraud_score"])
-    return_score = float(case_row["return_abuse_score"])
-    unified_score = float(case_row["unified_risk_score"])
-    order_value = float(case_row["order_value"])
-    past_returns = int(case_row["past_returns"])
-    chargeback_history = int(case_row["chargeback_history"])
-    payment_method = case_row["payment_method"]
-    product_name = case_row["product_name"]
-    product_category = case_row["product_category"]
-    state = case_row["state"]
-    country = case_row["country"]
-
-    if "summary" in q or "summarize" in q or "case" in q:
-        return (
-            f"Order {order_id} is a {priority}-priority {risk_type} case with status {case_status}. "
-            f"The order value is {format_currency(order_value)}, unified risk score is {unified_score:.3f}, "
-            f"and the current workflow stage is {workflow_stage}. "
-            f"Recommended action is {recommended_action}. Main reason flagged: {risk_reason}"
-        )
-
-    if "why" in q or "flagged" in q or "reason" in q:
-        return (
-            f"This case was flagged as {risk_type}. "
-            f"Fraud score is {fraud_score:.3f}, return-abuse score is {return_score:.3f}, "
-            f"and unified risk score is {unified_score:.3f}. "
-            f"Primary reason: {risk_reason}"
-        )
-
-    if "next step" in q or "what should i do" in q or "action" in q or "review first" in q:
-        return (
-            f"The recommended action for order {order_id} is {recommended_action}. "
-            f"The suggested next step is: {next_step}. "
-            f"Current stage is {workflow_stage}, so the analyst should align the next review step with that stage."
-        )
-
-    if "fraud" in q:
-        return (
-            f"Fraud score for order {order_id} is {fraud_score:.3f}. "
-            f"Payment method is {payment_method}, and the order location is {state}, {country}."
-        )
-
-    if "return" in q:
-        return (
-            f"Return-abuse score for order {order_id} is {return_score:.3f}. "
-            f"The product is {product_name} in category {product_category}, and the customer has {past_returns} past returns."
-        )
-
-    if "chargeback" in q:
-        return f"The customer has {chargeback_history} prior chargebacks associated with this case."
-
-    if "customer" in q or "verification" in q:
-        return (
-            f"For this case, a reasonable analyst path is to use the recommended action '{recommended_action}' "
-            f"and the AI next step '{next_step}' while requesting only the minimum required customer verification."
-        )
-
-    return (
-        f"I can help explain why order {order_id} was flagged, summarize the case, recommend the next step, "
-        f"or answer questions about fraud signals, return-abuse signals, verification, and escalation."
-    )
+def log_value_change(state_key: str, event_name: str, current_value):
+    if state_key not in st.session_state:
+        st.session_state[state_key] = current_value
+        log_event(f"{event_name}_initialized", current_value if isinstance(
+            current_value, dict) else {"value": current_value})
+    elif st.session_state[state_key] != current_value:
+        previous_value = st.session_state[state_key]
+        log_event(event_name, {"before": previous_value,
+                  "after": current_value})
+        st.session_state[state_key] = current_value
 
 
 def build_dashboard_context(data: pd.DataFrame) -> str:
@@ -625,6 +370,15 @@ st.title("Aignita RiskIQ")
 st.caption(
     "AI-powered fraud, return-abuse, and risk operations intelligence for e-commerce merchants")
 
+log_once("session_started_logged", "session_start", {"app": "Aignita RiskIQ"})
+
+viewer_email = st.sidebar.text_input(
+    "Viewer Email (for demo tracking)",
+    value=st.session_state.get("viewer_email", "")
+).strip().lower()
+if viewer_email:
+    st.session_state["viewer_email"] = viewer_email
+
 if df is None:
     st.error("data/transactions.csv not found.")
     st.code("python generate_data.py")
@@ -692,6 +446,19 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 else:
     start_date, end_date = date_min, date_max
 
+current_filters = {
+    "start_date": str(start_date),
+    "end_date": str(end_date),
+    "category_filter": category_filter,
+    "payment_filter": payment_filter,
+    "state_filter": state_filter,
+    "priority_filter": priority_filter,
+    "action_filter": action_filter,
+    "workflow_filter": workflow_filter,
+    "case_status_filter": case_status_filter,
+}
+log_value_change("last_filters", "filters_changed", current_filters)
+
 filtered_df = df[
     (df["state"].isin(state_filter)) &
     (df["product_category"].isin(category_filter)) &
@@ -722,19 +489,7 @@ top_state = safe_top_index(
     .sort_values(ascending=False)
 )
 
-st.markdown(f"""
-<div class="hero-box">
-    <div style="font-size:1.2rem; font-weight:700;">Risk Intelligence Summary</div>
-    <div style="margin-top:0.45rem;">
-        <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged high risk, with
-        <b>{format_currency(metrics["revenue_at_risk"])}</b> currently at risk and
-        <b>{format_currency(metrics["protected_revenue"])}</b> already protected across closed flagged cases.
-        There are <b>{metrics["critical_cases"]:,}</b> critical-priority cases.
-        Return-abuse pressure is highest in <b>{top_category}</b>, and fraud pressure is strongest in
-        <b>{top_state}</b>.
-    </div>
-</div>
-""", unsafe_allow_html=True)
+render_hero_summary(metrics, top_category, top_state)
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total Orders", f'{metrics["total_orders"]:,}')
@@ -752,6 +507,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
 )
 
 with tab1:
+    log_once("tab_overview_seen", "tab_view", {"tab": "Overview"})
     st.subheader("Executive Overview")
 
     col1, col2 = st.columns(2)
@@ -846,6 +602,7 @@ with tab1:
         )
 
 with tab2:
+    log_once("tab_fraudiq_seen", "tab_view", {"tab": "FraudIQ"})
     st.subheader("FraudIQ")
     fraud_df = filtered_df[filtered_df["risk_type_display"] == "Fraud"].copy()
 
@@ -910,6 +667,7 @@ with tab2:
         )
 
 with tab3:
+    log_once("tab_returniq_seen", "tab_view", {"tab": "ReturnIQ"})
     st.subheader("ReturnIQ")
     returns_df = filtered_df[filtered_df["risk_type_display"]
                              == "Return Abuse"].copy()
@@ -980,6 +738,7 @@ with tab3:
         )
 
 with tab4:
+    log_once("tab_action_center_seen", "tab_view", {"tab": "Action Center"})
     st.subheader("Action Center")
 
     open_flagged_cases = filtered_df[
@@ -1005,14 +764,11 @@ with tab4:
     kc3.metric("Protected Revenue", format_currency(potential_loss_prevented))
     kc4.metric("Closure Rate", f"{closure_rate:.1f}%")
 
-    st.markdown(f"""
-    <div class="section-note">
-        <b>Outcome Summary:</b> The current filtered view shows
-        <b>{len(closed_flagged_cases):,}</b> resolved flagged cases protecting
-        <b>{format_currency(potential_loss_prevented)}</b> in revenue, while
-        <b>{len(open_flagged_cases):,}</b> flagged cases remain active for review.
-    </div>
-    """, unsafe_allow_html=True)
+    render_outcome_summary(
+        len(closed_flagged_cases),
+        potential_loss_prevented,
+        len(open_flagged_cases),
+    )
 
     ac1, ac2 = st.columns(2)
 
@@ -1110,22 +866,10 @@ with tab4:
         )
 
 with tab5:
+    log_once("tab_ops_queue_seen", "tab_view", {"tab": "Ops Queue"})
     st.subheader("Ops Queue")
 
-    flagged_df = filtered_df[
-        (filtered_df["risk_level"] == "High") & (
-            filtered_df["case_status"] == "Open")
-    ].copy()
-
-    priority_order = {"Critical": 0, "High": 1, "Moderate": 2, "Low": 3}
-
-    if not flagged_df.empty:
-        flagged_df["priority_sort"] = flagged_df["priority_tier"].map(
-            priority_order)
-        flagged_df = flagged_df.sort_values(
-            ["priority_sort", "unified_risk_score", "order_value"],
-            ascending=[True, False, False]
-        )
+    flagged_df = sort_cases_by_priority(get_open_high_risk_cases(filtered_df))
 
     oq1, oq2 = st.columns(2)
     oq1.metric("Open High-Risk Cases", f"{len(flagged_df):,}")
@@ -1136,20 +880,27 @@ with tab5:
     )
 
     qc1, qc2 = st.columns(2)
-    qc1.download_button(
+    download_open_cases = qc1.download_button(
         label="Download Open Cases CSV",
         data=to_csv_download(flagged_df.drop(
             columns=["priority_sort", "risk_type_display"], errors="ignore")),
         file_name="aignita_open_cases.csv",
-        mime="text/csv"
+        mime="text/csv",
+        key="download_open_cases"
     )
-    qc2.download_button(
+    if download_open_cases:
+        log_event("download_clicked", {"file": "aignita_open_cases.csv"})
+
+    download_filtered_dataset = qc2.download_button(
         label="Download Filtered Dataset CSV",
         data=to_csv_download(filtered_df.drop(
             columns=["risk_type_display"], errors="ignore")),
         file_name="aignita_filtered_dataset.csv",
-        mime="text/csv"
+        mime="text/csv",
+        key="download_filtered_dataset"
     )
+    if download_filtered_dataset:
+        log_event("download_clicked", {"file": "aignita_filtered_dataset.csv"})
 
     if flagged_df.empty:
         st.warning("No open cases in the current filter selection.")
@@ -1182,6 +933,12 @@ with tab5:
             "Select an Order ID to inspect",
             options=case_options
         )
+        log_value_change(
+            "last_selected_order_id",
+            "case_selected",
+            {"order_id": selected_order_id}
+        )
+
         selected_case = flagged_df[flagged_df["order_id"]
                                    == selected_order_id].iloc[0]
         st.session_state["selected_case"] = selected_case
@@ -1194,25 +951,7 @@ with tab5:
         dc3.metric("Priority", str(selected_case["priority_tier"]))
         dc4.metric("Case Status", str(selected_case["case_status"]))
 
-        st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:1.05rem; font-weight:700; margin-bottom:0.5rem;">
-                Case Summary: {selected_case["order_id"]}
-            </div>
-            <div><b>Customer ID:</b> {selected_case["customer_id"]}</div>
-            <div><b>Order Date:</b> {pd.to_datetime(selected_case["order_date"]).date()}</div>
-            <div><b>Risk Type:</b> {selected_case["risk_type_display"]}</div>
-            <div><b>Product:</b> {selected_case["product_name"]} ({selected_case["product_category"]})</div>
-            <div><b>Location:</b> {selected_case["state"]}, {selected_case["country"]}</div>
-            <div><b>Payment Method:</b> {selected_case["payment_method"]}</div>
-            <div><b>Workflow Stage:</b> {selected_case["workflow_stage"]}</div>
-            <div><b>Recommended Action:</b> {selected_case["recommended_action"]}</div>
-            <div><b>Action Owner:</b> {selected_case["action_owner"]}</div>
-            <div><b>Handling Mode:</b> {selected_case["automation_level"]}</div>
-            <div style="margin-top:0.7rem;"><b>Why this was flagged:</b> {selected_case["risk_reason_summary"]}</div>
-            <div style="margin-top:0.5rem;"><b>AI Suggested Next Step:</b> {selected_case["ai_agent_next_step"]}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        render_case_detail_box(selected_case)
 
         st.markdown("#### Key Risk Signals")
         signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(
@@ -1269,6 +1008,22 @@ with tab5:
                 "AI Analyst mode requires a configured GROQ_API_KEY. Quick Case Insights works without it.")
 
         if case_question:
+            if st.session_state.get("last_case_question_logged") != {
+                "order_id": selected_order_id,
+                "question": case_question,
+                "mode": case_mode,
+            }:
+                log_event("case_question_submitted", {
+                    "order_id": selected_order_id,
+                    "question": case_question,
+                    "mode": case_mode,
+                })
+                st.session_state["last_case_question_logged"] = {
+                    "order_id": selected_order_id,
+                    "question": case_question,
+                    "mode": case_mode,
+                }
+
             with st.spinner("Analyzing selected case..."):
                 if case_mode == "AI Analyst":
                     case_answer = ask_case_copilot(
@@ -1288,6 +1043,10 @@ with tab5:
 
         with ops_col1:
             if st.button("Draft Customer Verification Message"):
+                log_event("case_artifact_generated", {
+                    "artifact_type": "customer_verification_draft",
+                    "order_id": selected_order_id
+                })
                 with st.spinner("Generating verification draft..."):
                     st.session_state["case_output"] = generate_ai_output(
                         "customer_verification_draft",
@@ -1297,6 +1056,10 @@ with tab5:
 
         with ops_col2:
             if st.button("Create Ops Action Plan"):
+                log_event("case_artifact_generated", {
+                    "artifact_type": "ops_action_plan",
+                    "order_id": selected_order_id
+                })
                 with st.spinner("Generating ops plan..."):
                     st.session_state["case_output"] = generate_ai_output(
                         "ops_action_plan",
@@ -1309,6 +1072,7 @@ with tab5:
             st.write(st.session_state["case_output"])
 
 with tab6:
+    log_once("tab_ai_copilot_seen", "tab_view", {"tab": "AI Risk Copilot"})
     st.subheader("AI Risk Copilot")
     st.markdown("Use Copilot to **ask broader portfolio questions** and **generate strategic outputs** for merchant and policy workflows.")
 
@@ -1345,24 +1109,25 @@ with tab6:
             "AI Copilot mode requires a configured GROQ_API_KEY. Quick Insights works without it.")
 
     if question:
+        if st.session_state.get("last_copilot_question_logged") != {
+            "question": question,
+            "mode": copilot_mode,
+        }:
+            log_event("copilot_question_submitted", {
+                "question": question,
+                "mode": copilot_mode,
+            })
+            st.session_state["last_copilot_question_logged"] = {
+                "question": question,
+                "mode": copilot_mode,
+            }
+
         selected_case_for_ai = st.session_state.get("selected_case", None)
         used_fallback_case = False
 
         if selected_case_for_ai is None:
-            fallback_cases = filtered_df[
-                (filtered_df["risk_level"] == "High") & (
-                    filtered_df["case_status"] == "Open")
-            ].copy()
-            if not fallback_cases.empty:
-                fallback_cases["priority_sort"] = fallback_cases["priority_tier"].map(
-                    {"Critical": 0, "High": 1, "Moderate": 2, "Low": 3}
-                )
-                fallback_cases = fallback_cases.sort_values(
-                    ["priority_sort", "unified_risk_score", "order_value"],
-                    ascending=[True, False, False]
-                )
-                selected_case_for_ai = fallback_cases.iloc[0]
-                used_fallback_case = True
+            selected_case_for_ai, used_fallback_case = select_fallback_case(
+                filtered_df)
 
         if used_fallback_case:
             st.info("No case was manually selected in Ops Queue. Copilot is using the highest-priority open case from the current filters.")
@@ -1385,6 +1150,9 @@ with tab6:
     ag1, ag2 = st.columns(2)
     with ag1:
         if st.button("Generate Merchant Summary"):
+            log_event("strategic_artifact_generated", {
+                "artifact_type": "merchant_summary"
+            })
             with st.spinner("Generating merchant summary..."):
                 st.session_state["strategic_output"] = generate_ai_output(
                     "merchant_summary",
@@ -1394,6 +1162,9 @@ with tab6:
 
     with ag2:
         if st.button("Generate Policy Recommendation"):
+            log_event("strategic_artifact_generated", {
+                "artifact_type": "policy_recommendation"
+            })
             with st.spinner("Generating policy recommendation..."):
                 st.session_state["strategic_output"] = generate_ai_output(
                     "policy_recommendation",
@@ -1405,25 +1176,14 @@ with tab6:
         st.markdown("### Generated Strategic Output")
         st.write(st.session_state["strategic_output"])
 
-st.markdown("---")
-st.subheader("AI Risk Insights")
-
-insight_text = f"""
-- **{metrics["flagged_pct"]:.1f}%** of filtered orders are flagged high risk.
-- **{metrics["critical_cases"]:,}** cases are currently marked **Critical** and should be handled first.
-- **{metrics["open_cases"]:,}** cases are currently open, while **{metrics["closed_cases"]:,}** have already been resolved.
-- **{format_currency(metrics["protected_revenue"])}** in revenue has already been protected across closed flagged cases.
-- **{top_category}** is the strongest return-abuse category.
-- **{top_state}** has the highest average fraud score.
-"""
-
-st.info(insight_text)
-
-st.markdown("""
-<div class="section-note">
-    <b>Pilot with Aignita:</b> Interested in using RiskIQ for your store or risk operations workflow? Reach out to discuss a pilot or custom implementation.
-</div>
-""", unsafe_allow_html=True)
+render_insight_footer(metrics, top_category, top_state)
 
 with st.expander("Show raw filtered data"):
     st.dataframe(filtered_df.head(200), use_container_width=True)
+
+with st.expander("Show event log (demo tracking)"):
+    event_log_df = pd.DataFrame(st.session_state.get("event_log", []))
+    if event_log_df.empty:
+        st.caption("No tracked events yet in this session.")
+    else:
+        st.dataframe(event_log_df, use_container_width=True)
