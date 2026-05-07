@@ -26,10 +26,14 @@ from src.risk_logic import (
     sort_cases_by_priority,
 )
 from src.ui_components import (
+    render_ai_answer,
+    render_ai_output,
     render_case_detail_box,
+    render_demo_banner,
     render_hero_summary,
     render_insight_footer,
     render_outcome_summary,
+    render_page_header,
     render_timeline_html,
 )
 
@@ -37,42 +41,257 @@ st.set_page_config(page_title="Aignita RiskIQ", layout="wide")
 
 st.markdown("""
 <style>
-    .block-container {
-        padding-top: 1rem;
-        padding-bottom: 1rem;
-        max-width: 96rem;
-    }
-    .hero-box {
-        padding: 1rem 1.2rem;
-        border: 1px solid rgba(120,120,120,0.2);
-        border-radius: 14px;
-        margin-bottom: 1rem;
-        background: rgba(250,250,250,0.03);
-    }
-    .detail-box {
-        padding: 1rem 1.2rem;
-        border: 1px solid rgba(120,120,120,0.18);
-        border-radius: 12px;
-        margin-top: 0.5rem;
-        margin-bottom: 1rem;
-        background: rgba(250,250,250,0.02);
-    }
-    .section-note {
-        padding: 0.8rem 1rem;
-        border: 1px solid rgba(120,120,120,0.14);
-        border-radius: 12px;
-        margin-bottom: 0.8rem;
-        background: rgba(250,250,250,0.02);
-    }
-    .case-signal-box {
-        padding: 0.9rem 1rem;
-        border: 1px solid rgba(120,120,120,0.14);
-        border-radius: 12px;
-        margin-top: 0.8rem;
-        background: rgba(250,250,250,0.02);
-    }
+/* === Aignita RiskIQ Design System === */
+
+.block-container {
+    padding-top: 1.25rem;
+    padding-bottom: 2rem;
+    max-width: 96rem;
+}
+
+/* Metric cards */
+[data-testid="stMetric"] {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.75rem 1rem !important;
+}
+[data-testid="stMetricLabel"] > div,
+[data-testid="stMetricLabel"] p {
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #64748b !important;
+}
+[data-testid="stMetricValue"] > div {
+    font-size: 1.45rem !important;
+    font-weight: 700 !important;
+    color: #1e293b !important;
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    background: #f1f5f9;
+    border-radius: 8px;
+    padding: 3px;
+    gap: 2px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 6px;
+    font-size: 0.84rem;
+    font-weight: 500;
+    color: #64748b;
+    padding: 0.35rem 0.9rem;
+    border: none;
+}
+.stTabs [aria-selected="true"] {
+    background: #ffffff !important;
+    color: #1e293b !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+}
+.stTabs [data-baseweb="tab-highlight"] {
+    display: none;
+}
+
+/* Sidebar */
+[data-testid="stSidebar"] {
+    background: #ffffff;
+    border-right: 1px solid #e2e8f0;
+}
+
+/* Buttons */
+.stButton > button {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    color: #475569;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    padding: 0.3rem 0.7rem;
+    transition: border-color 0.1s ease, background 0.1s ease;
+}
+.stButton > button:hover {
+    background: #f8f9fb !important;
+    border-color: #94a3b8 !important;
+    color: #1e293b !important;
+}
+
+/* Download buttons */
+[data-testid="stDownloadButton"] > button {
+    background: #1e293b !important;
+    color: #ffffff !important;
+    border: 1px solid #1e293b !important;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    font-weight: 500;
+}
+[data-testid="stDownloadButton"] > button:hover {
+    background: #334155 !important;
+    border-color: #334155 !important;
+}
+
+/* Page header */
+.riq-page-header {
+    padding: 0.75rem 0 0.75rem 0;
+    margin-bottom: 0.75rem;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+/* Hero summary card */
+.riq-hero {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+}
+
+/* Case detail card */
+.riq-detail {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-top: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+/* Accent note strip */
+.riq-note {
+    background: #f8f9fb;
+    border: 1px solid #e2e8f0;
+    border-left: 3px solid #4f46e5;
+    border-radius: 0 6px 6px 0;
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.86rem;
+    color: #475569;
+}
+
+/* Demo banner */
+.riq-demo-banner {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    padding: 0.45rem 0.85rem;
+    margin-bottom: 1rem;
+    font-size: 0.82rem;
+    color: #1d4ed8;
+}
+
+/* AI answer area */
+.riq-answer {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-top: 0.5rem;
+    color: #1e293b;
+    font-size: 0.88rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+}
+
+/* Generated output area */
+.riq-output {
+    background: #fefce8;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-top: 0.5rem;
+    color: #1e293b;
+    font-size: 0.88rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+}
+
+/* Risk & status badges */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.7;
+}
+.badge-critical { background:#fef2f2; color:#dc2626; border:1px solid #fecaca; }
+.badge-high     { background:#fff7ed; color:#ea580c; border:1px solid #fed7aa; }
+.badge-moderate { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
+.badge-low      { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
+.badge-fraud    { background:#eef2ff; color:#4f46e5; border:1px solid #c7d2fe; }
+.badge-return   { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
+.badge-open     { background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; }
+.badge-closed   { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
+.badge-neutral  { background:#f1f5f9; color:#475569; border:1px solid #e2e8f0; }
 </style>
 """, unsafe_allow_html=True)
+
+# ── Chart styling ───────────────────────────────────────────────────────────────
+
+CHART_COLORS = ["#4f46e5", "#d97706", "#16a34a", "#dc2626", "#0284c7", "#7c3aed", "#64748b"]
+PRIORITY_COLORS = {"Critical": "#dc2626", "High": "#ea580c", "Moderate": "#d97706", "Low": "#16a34a"}
+RISK_TYPE_COLORS = {"Fraud": "#4f46e5", "Return Abuse": "#d97706"}
+
+
+def style_chart(
+    fig,
+    height: int = 320,
+    showlegend: bool | None = None,
+    x_tickangle: int = 0,
+):
+    if showlegend is not None:
+        fig.update_layout(showlegend=showlegend)
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#ffffff",
+        font=dict(
+            family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif",
+            size=12,
+            color="#334155",
+        ),
+        title_font=dict(size=13, color="#1e293b"),
+        title_pad=dict(l=0, t=4),
+        margin=dict(l=58, r=18, t=48, b=72),
+        height=height,
+        xaxis=dict(
+            gridcolor="#f1f5f9",
+            linecolor="#e2e8f0",
+            tickfont=dict(size=11, color="#64748b"),
+            title_font=dict(size=11, color="#64748b"),
+            zeroline=False,
+            automargin=True,
+            tickangle=x_tickangle,
+            ticklabelposition="outside",
+        ),
+        yaxis=dict(
+            gridcolor="#f1f5f9",
+            linecolor="#e2e8f0",
+            tickfont=dict(size=11, color="#64748b"),
+            title_font=dict(size=11, color="#64748b"),
+            zeroline=False,
+            automargin=True,
+            rangemode="tozero",
+        ),
+        legend=dict(
+            font=dict(size=11, color="#64748b"),
+            bgcolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+        colorway=CHART_COLORS,
+        bargap=0.28,
+    )
+    fig.update_traces(marker_line_width=0)
+    return fig
+
+
+# ── Bootstrap ───────────────────────────────────────────────────────────────────
 
 load_dotenv()
 GROQ_API_KEY = os.getenv(
@@ -360,15 +579,15 @@ Task:
     return ask_groq(prompt, system_prompt, max_tokens=700)
 
 
+# ── Data load ────────────────────────────────────────────────────────────────────
+
 try:
     df = load_data()
 except Exception as e:
     st.error(f"Failed to load dataset: {e}")
     st.stop()
 
-st.title("Aignita RiskIQ")
-st.caption(
-    "AI-powered fraud, return-abuse, and risk operations intelligence for e-commerce merchants")
+render_page_header()
 
 log_once("session_started_logged", "session_start", {"app": "Aignita RiskIQ"})
 
@@ -384,7 +603,7 @@ if df is None:
     st.code("python generate_data.py")
     st.stop()
 
-st.info("Demo note: This prototype uses simulated e-commerce transaction data to illustrate fraud, return-abuse, and risk operations workflows.")
+render_demo_banner()
 
 st.sidebar.header("Filters")
 st.sidebar.caption("Filters apply across all tabs and AI outputs.")
@@ -506,6 +725,8 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
         "Action Center", "Ops Queue", "AI Risk Copilot"]
 )
 
+# ── Tab 1: Overview ──────────────────────────────────────────────────────────────
+
 with tab1:
     log_once("tab_overview_seen", "tab_view", {"tab": "Overview"})
     st.subheader("Executive Overview")
@@ -528,9 +749,12 @@ with tab1:
         col1.info("No trend data available for the selected filters.")
     else:
         col1.plotly_chart(
-            px.line(trend_df, x="order_day", y="flagged_rate",
-                    title="Flagged Order Rate Over Time (%)",
-                    labels={"order_day": "Order Date", "flagged_rate": "Flagged Rate (%)"}),
+            style_chart(px.line(
+                trend_df, x="order_day", y="flagged_rate",
+                title="Flagged Order Rate Over Time (%)",
+                labels={"order_day": "Order Date", "flagged_rate": "Flagged Rate (%)"},
+                color_discrete_sequence=["#4f46e5"],
+            )),
             use_container_width=True
         )
 
@@ -546,10 +770,13 @@ with tab1:
         col2.info("No loss exposure data available for the selected filters.")
     else:
         col2.plotly_chart(
-            px.bar(loss_exposure, x="risk_type_display",
-                   y="order_value",
-                   title="Loss Exposure by Risk Type",
-                   labels={"risk_type_display": "Risk Type", "order_value": "Loss Exposure ($)"}),
+            style_chart(px.bar(
+                loss_exposure, x="risk_type_display", y="order_value",
+                title="Loss Exposure by Risk Type",
+                labels={"risk_type_display": "Risk Type", "order_value": "Loss Exposure ($)"},
+                color="risk_type_display",
+                color_discrete_map=RISK_TYPE_COLORS,
+            ), showlegend=False),
             use_container_width=True
         )
 
@@ -564,23 +791,29 @@ with tab1:
     flagged_priority.columns = ["priority_tier", "count"]
 
     col3.plotly_chart(
-        px.bar(flagged_priority, x="priority_tier", y="count",
-               title="Flagged Cases by Risk Exposure Priority",
-               labels={"priority_tier": "Priority Tier", "count": "Number of Cases"}),
+        style_chart(px.bar(
+            flagged_priority, x="priority_tier", y="count",
+            title="Flagged Cases by Risk Exposure Priority",
+            labels={"priority_tier": "Priority Tier", "count": "Number of Cases"},
+            color="priority_tier",
+            color_discrete_map=PRIORITY_COLORS,
+            category_orders={"priority_tier": ["Critical", "High", "Moderate"]},
+        ), showlegend=False),
         use_container_width=True
     )
 
-    action_dist = filtered_df["recommended_action"].value_counts(
-    ).reset_index()
+    action_dist = filtered_df["recommended_action"].value_counts().reset_index()
     action_dist.columns = ["recommended_action", "count"]
 
     if action_dist.empty:
         col4.info("No recommended actions available for the selected filters.")
     else:
         col4.plotly_chart(
-            px.bar(action_dist, x="recommended_action",
-                   y="count", title="Recommended Actions",
-                   labels={"recommended_action": "Recommended Action", "count": "Number of Cases"}),
+            style_chart(px.bar(
+                action_dist, x="recommended_action", y="count",
+                title="Recommended Actions",
+                labels={"recommended_action": "Recommended Action", "count": "Number of Cases"},
+            ), x_tickangle=-20),
             use_container_width=True
         )
 
@@ -595,11 +828,15 @@ with tab1:
         st.info("No workflow stage data available for the selected filters.")
     else:
         st.plotly_chart(
-            px.bar(workflow_dist, x="workflow_stage",
-                   y="count", title="Workflow Stage Split",
-                   labels={"workflow_stage": "Workflow Stage", "count": "Number of Cases"}),
+            style_chart(px.bar(
+                workflow_dist, x="workflow_stage", y="count",
+                title="Workflow Stage Split",
+                labels={"workflow_stage": "Workflow Stage", "count": "Number of Cases"},
+            ), x_tickangle=-15),
             use_container_width=True
         )
+
+# ── Tab 2: FraudIQ ────────────────────────────────────────────────────────────────
 
 with tab2:
     log_once("tab_fraudiq_seen", "tab_view", {"tab": "FraudIQ"})
@@ -637,15 +874,21 @@ with tab2:
             "fraud_score"].mean().sort_values("fraud_score", ascending=False)
 
         fcol1.plotly_chart(
-            px.bar(fraud_by_state, x="state", y="fraud_score",
-                   title="Average Fraud Score by State",
-                   labels={"state": "State", "fraud_score": "Average Fraud Score"}),
+            style_chart(px.bar(
+                fraud_by_state, x="state", y="fraud_score",
+                title="Average Fraud Score by State",
+                labels={"state": "State", "fraud_score": "Average Fraud Score"},
+                color_discrete_sequence=["#4f46e5"],
+            )),
             use_container_width=True
         )
         fcol2.plotly_chart(
-            px.bar(fraud_by_payment, x="payment_method", y="fraud_score",
-                   title="Average Fraud Score by Payment Method",
-                   labels={"payment_method": "Payment Method", "fraud_score": "Average Fraud Score"}),
+            style_chart(px.bar(
+                fraud_by_payment, x="payment_method", y="fraud_score",
+                title="Average Fraud Score by Payment Method",
+                labels={"payment_method": "Payment Method", "fraud_score": "Average Fraud Score"},
+                color_discrete_sequence=["#4f46e5"],
+            ), x_tickangle=-15),
             use_container_width=True
         )
 
@@ -665,6 +908,8 @@ with tab2:
             }),
             use_container_width=True
         )
+
+# ── Tab 3: ReturnIQ ───────────────────────────────────────────────────────────────
 
 with tab3:
     log_once("tab_returniq_seen", "tab_view", {"tab": "ReturnIQ"})
@@ -708,15 +953,23 @@ with tab3:
         )
 
         rcol1.plotly_chart(
-            px.bar(returns_by_category, x="product_category",
-                   y="return_abuse_score", title="Return Abuse Score by Category",
-                     labels={"product_category": "Product Category", "return_abuse_score": "Average Return Abuse Score"}),
+            style_chart(px.bar(
+                returns_by_category, x="product_category", y="return_abuse_score",
+                title="Return Abuse Score by Category",
+                labels={"product_category": "Product Category",
+                        "return_abuse_score": "Average Return Abuse Score"},
+                color_discrete_sequence=["#d97706"],
+            ), x_tickangle=-15),
             use_container_width=True
         )
         rcol2.plotly_chart(
-            px.bar(returns_by_product, x="product_name", y="return_abuse_score",
-                   title="Top Products by Return Abuse Score",
-                   labels={"product_name": "Product Name", "return_abuse_score": "Average Return Abuse Score"}),
+            style_chart(px.bar(
+                returns_by_product, x="product_name", y="return_abuse_score",
+                title="Top Products by Return Abuse Score",
+                labels={"product_name": "Product Name",
+                        "return_abuse_score": "Average Return Abuse Score"},
+                color_discrete_sequence=["#d97706"],
+            ), x_tickangle=-30),
             use_container_width=True
         )
 
@@ -736,6 +989,8 @@ with tab3:
             }),
             use_container_width=True
         )
+
+# ── Tab 4: Action Center ──────────────────────────────────────────────────────────
 
 with tab4:
     log_once("tab_action_center_seen", "tab_view", {"tab": "Action Center"})
@@ -790,28 +1045,29 @@ with tab4:
         st.warning("No action summary available for the selected filters.")
     else:
         ac1.plotly_chart(
-            px.bar(
+            style_chart(px.bar(
                 action_summary,
                 x="recommended_action",
                 y="orders",
                 color="automation_level",
                 title="Action Volume by Recommendation",
                 labels={"recommended_action": "Recommended Action",
-                        "orders": "Number of Cases", "automation_level": "Automation Level"}
-            ),
+                        "orders": "Number of Cases", "automation_level": "Automation Level"},
+            ), showlegend=True, x_tickangle=-20),
             use_container_width=True
         )
 
         ac2.plotly_chart(
-            px.bar(
+            style_chart(px.bar(
                 action_summary,
                 x="action_owner",
                 y="orders",
                 color="priority_tier",
                 title="Action Ownership by Priority",
                 labels={"action_owner": "Action Owner",
-                        "orders": "Number of Cases", "priority_tier": "Priority Tier"}
-            ),
+                        "orders": "Number of Cases", "priority_tier": "Priority Tier"},
+                color_discrete_map=PRIORITY_COLORS,
+            ), showlegend=True, x_tickangle=-15),
             use_container_width=True
         )
 
@@ -864,6 +1120,8 @@ with tab4:
             }),
             use_container_width=True
         )
+
+# ── Tab 5: Ops Queue ──────────────────────────────────────────────────────────────
 
 with tab5:
     log_once("tab_ops_queue_seen", "tab_view", {"tab": "Ops Queue"})
@@ -926,6 +1184,7 @@ with tab5:
             use_container_width=True
         )
 
+        st.markdown("---")
         st.markdown("### Selected Case")
 
         case_options = flagged_df["order_id"].tolist()
@@ -954,8 +1213,7 @@ with tab5:
         render_case_detail_box(selected_case)
 
         st.markdown("#### Key Risk Signals")
-        signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(
-            5)
+        signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(5)
         signal_col1.metric(
             "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
         signal_col2.metric("Return Abuse Score",
@@ -1033,7 +1291,7 @@ with tab5:
                         case_question, selected_case)
 
             st.markdown("#### Case Answer")
-            st.info(case_answer)
+            render_ai_answer(case_answer)
 
         st.markdown("---")
         st.markdown("### Case Action Assistant")
@@ -1069,7 +1327,9 @@ with tab5:
 
         if "case_output" in st.session_state and st.session_state["case_output"]:
             st.markdown("#### Generated Case Output")
-            st.write(st.session_state["case_output"])
+            render_ai_output(st.session_state["case_output"])
+
+# ── Tab 6: AI Risk Copilot ────────────────────────────────────────────────────────
 
 with tab6:
     log_once("tab_ai_copilot_seen", "tab_view", {"tab": "AI Risk Copilot"})
@@ -1130,7 +1390,11 @@ with tab6:
                 filtered_df)
 
         if used_fallback_case:
-            st.info("No case was manually selected in Ops Queue. Copilot is using the highest-priority open case from the current filters.")
+            st.markdown("""
+<div class="riq-demo-banner">
+  No case was manually selected in Ops Queue. Copilot is using the highest-priority open case from the current filters.
+</div>
+""", unsafe_allow_html=True)
 
         with st.spinner("Copilot thinking..."):
             if copilot_mode == "AI Copilot":
@@ -1140,7 +1404,7 @@ with tab6:
                 answer = answer_risk_question(question, filtered_df)
 
         st.markdown("### Copilot Answer")
-        st.info(answer)
+        render_ai_answer(answer)
 
     st.markdown("---")
     st.markdown("### Generate Strategic Outputs")
@@ -1174,7 +1438,9 @@ with tab6:
 
     if "strategic_output" in st.session_state and st.session_state["strategic_output"]:
         st.markdown("### Generated Strategic Output")
-        st.write(st.session_state["strategic_output"])
+        render_ai_output(st.session_state["strategic_output"])
+
+# ── Footer ────────────────────────────────────────────────────────────────────────
 
 render_insight_footer(metrics, top_category, top_state)
 

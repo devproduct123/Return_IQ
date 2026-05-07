@@ -1,106 +1,201 @@
+import html as _html
+
 import pandas as pd
 import streamlit as st
 
 from src.metrics import format_currency
 
 
+# ── Badge helpers ───────────────────────────────────────────────────────────────
+
+_BADGE_CLASS = {
+    "Critical":     "badge-critical",
+    "High":         "badge-high",
+    "Moderate":     "badge-moderate",
+    "Low":          "badge-low",
+    "Fraud":        "badge-fraud",
+    "Return Abuse": "badge-return",
+    "Open":         "badge-open",
+    "Closed":       "badge-closed",
+}
+
+
+def _badge(text: str) -> str:
+    css = _BADGE_CLASS.get(text, "badge-neutral")
+    return f'<span class="badge {css}">{_html.escape(text)}</span>'
+
+
+# ── Page-level components ───────────────────────────────────────────────────────
+
+def render_page_header():
+    st.markdown("""
+<div class="riq-page-header">
+  <div style="display:flex;align-items:baseline;gap:0.5rem;">
+    <span style="font-size:1.3rem;font-weight:700;color:#1e293b;letter-spacing:-0.02em;">Aignita RiskIQ</span>
+    <span class="badge badge-neutral" style="font-size:0.62rem;padding:1px 6px;">DEMO</span>
+  </div>
+  <div style="font-size:0.8rem;color:#64748b;margin-top:2px;">
+    AI-powered fraud, return-abuse, and risk operations intelligence for e-commerce merchants
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+
+def render_demo_banner():
+    st.markdown("""
+<div class="riq-demo-banner">
+  <b>Demo:</b> This prototype uses simulated e-commerce transaction data to illustrate
+  fraud, return-abuse, and risk operations workflows.
+</div>
+""", unsafe_allow_html=True)
+
+
+# ── Summary components ──────────────────────────────────────────────────────────
+
 def render_hero_summary(metrics: dict, top_category: str, top_state: str):
     st.markdown(f"""
-<div class="hero-box">
-    <div style="font-size:1.2rem; font-weight:700;">Risk Intelligence Summary</div>
-    <div style="margin-top:0.45rem;">
-        <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged high risk, with
-        <b>{format_currency(metrics["revenue_at_risk"])}</b> currently at risk and
-        <b>{format_currency(metrics["protected_revenue"])}</b> already protected across closed flagged cases.
-        There are <b>{metrics["critical_cases"]:,}</b> critical-priority cases.
-        Return-abuse pressure is highest in <b>{top_category}</b>, and fraud pressure is strongest in
-        <b>{top_state}</b>.
-    </div>
+<div class="riq-hero">
+  <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#94a3b8;margin-bottom:0.4rem;">Risk Intelligence Summary</div>
+  <div style="font-size:0.9rem;color:#334155;line-height:1.75;">
+    <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged high risk, with
+    <b>{format_currency(metrics["revenue_at_risk"])}</b> currently at risk and
+    <b>{format_currency(metrics["protected_revenue"])}</b> already protected across closed flagged cases.
+    There are <b>{metrics["critical_cases"]:,}</b> critical-priority cases.
+    Return-abuse pressure is highest in <b>{_html.escape(str(top_category))}</b>, and fraud pressure is strongest in
+    <b>{_html.escape(str(top_state))}</b>.
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
 
 def render_section_note(html_body: str):
+    st.markdown(f'<div class="riq-note">{html_body}</div>', unsafe_allow_html=True)
+
+
+def render_outcome_summary(closed_count: int, protected_revenue: float, open_count: int):
     st.markdown(f"""
-<div class="section-note">
-    {html_body}
+<div class="riq-note" style="border-left-color:#16a34a;">
+  <b>Outcome Summary:</b> {closed_count:,} resolved flagged cases protecting
+  <b style="color:#16a34a;">{format_currency(protected_revenue)}</b> in revenue &nbsp;·&nbsp;
+  <b style="color:#dc2626;">{open_count:,}</b> flagged cases remain active for review.
 </div>
 """, unsafe_allow_html=True)
 
 
-def render_outcome_summary(
-    closed_count: int,
-    protected_revenue: float,
-    open_count: int,
-):
-    st.markdown(f"""
-    <div class="section-note">
-        <b>Outcome Summary:</b> The current filtered view shows
-        <b>{closed_count:,}</b> resolved flagged cases protecting
-        <b>{format_currency(protected_revenue)}</b> in revenue, while
-        <b>{open_count:,}</b> flagged cases remain active for review.
-    </div>
-    """, unsafe_allow_html=True)
-
+# ── Case components ─────────────────────────────────────────────────────────────
 
 def render_case_detail_box(selected_case: pd.Series):
+    priority    = str(selected_case["priority_tier"])
+    risk_type   = str(selected_case["risk_type_display"])
+    case_status = str(selected_case["case_status"])
+
+    order_id    = _html.escape(str(selected_case["order_id"]))
+    customer_id = _html.escape(str(selected_case["customer_id"]))
+    order_date  = str(pd.to_datetime(selected_case["order_date"]).date())
+    product     = _html.escape(f"{selected_case['product_name']} ({selected_case['product_category']})")
+    location    = _html.escape(f"{selected_case['state']}, {selected_case['country']}")
+    payment     = _html.escape(str(selected_case["payment_method"]))
+    workflow    = _html.escape(str(selected_case["workflow_stage"]))
+    action      = _html.escape(str(selected_case["recommended_action"]))
+    owner       = _html.escape(str(selected_case["action_owner"]))
+    handling    = _html.escape(str(selected_case["automation_level"]))
+    reason      = _html.escape(str(selected_case["risk_reason_summary"]))
+    next_step   = _html.escape(str(selected_case["ai_agent_next_step"]))
+
+    def _field(label: str, value: str) -> str:
+        return (
+            f'<div>'
+            f'<div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;'
+            f'letter-spacing:0.05em;color:#94a3b8;">{label}</div>'
+            f'<div style="font-size:0.84rem;color:#334155;margin-top:1px;">{value}</div>'
+            f'</div>'
+        )
+
     st.markdown(f"""
-        <div class="detail-box">
-            <div style="font-size:1.05rem; font-weight:700; margin-bottom:0.5rem;">
-                Case Summary: {selected_case["order_id"]}
-            </div>
-            <div><b>Customer ID:</b> {selected_case["customer_id"]}</div>
-            <div><b>Order Date:</b> {pd.to_datetime(selected_case["order_date"]).date()}</div>
-            <div><b>Risk Type:</b> {selected_case["risk_type_display"]}</div>
-            <div><b>Product:</b> {selected_case["product_name"]} ({selected_case["product_category"]})</div>
-            <div><b>Location:</b> {selected_case["state"]}, {selected_case["country"]}</div>
-            <div><b>Payment Method:</b> {selected_case["payment_method"]}</div>
-            <div><b>Workflow Stage:</b> {selected_case["workflow_stage"]}</div>
-            <div><b>Recommended Action:</b> {selected_case["recommended_action"]}</div>
-            <div><b>Action Owner:</b> {selected_case["action_owner"]}</div>
-            <div><b>Handling Mode:</b> {selected_case["automation_level"]}</div>
-            <div style="margin-top:0.7rem;"><b>Why this was flagged:</b> {selected_case["risk_reason_summary"]}</div>
-            <div style="margin-top:0.5rem;"><b>AI Suggested Next Step:</b> {selected_case["ai_agent_next_step"]}</div>
-        </div>
-        """, unsafe_allow_html=True)
+<div class="riq-detail">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.8rem;">
+    <div>
+      <span style="font-size:0.68rem;font-weight:600;text-transform:uppercase;
+        letter-spacing:0.06em;color:#94a3b8;">Order</span>
+      <span style="font-size:1rem;font-weight:700;color:#1e293b;margin-left:0.4rem;">{order_id}</span>
+    </div>
+    <div style="display:flex;gap:0.35rem;">
+      {_badge(priority)}{_badge(risk_type)}{_badge(case_status)}
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.55rem 1.5rem;margin-bottom:0.8rem;">
+    {_field("Customer", customer_id)}
+    {_field("Order Date", order_date)}
+    {_field("Product", product)}
+    {_field("Location", location)}
+    {_field("Payment", payment)}
+    {_field("Workflow Stage", workflow)}
+    {_field("Recommended Action", action)}
+    {_field("Action Owner", owner)}
+    {_field("Handling Mode", handling)}
+  </div>
+  <div style="border-top:1px solid #e2e8f0;padding-top:0.65rem;">
+    <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;
+      letter-spacing:0.06em;color:#94a3b8;margin-bottom:0.25rem;">Why Flagged</div>
+    <div style="font-size:0.84rem;color:#334155;">{reason}</div>
+  </div>
+  <div style="margin-top:0.55rem;">
+    <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;
+      letter-spacing:0.06em;color:#94a3b8;margin-bottom:0.25rem;">AI Suggested Next Step</div>
+    <div style="font-size:0.84rem;color:#334155;background:#f8f9fb;
+      border:1px solid #e2e8f0;border-radius:5px;padding:0.45rem 0.7rem;">{next_step}</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 
 def render_timeline_html(steps):
     status_styles = {
-        "done": "background:#dcfce7;color:#166534;border:1px solid #bbf7d0;",
-        "current": "background:#dbeafe;color:#1d4ed8;border:1px solid #bfdbfe;",
-        "pending": "background:#f3f4f6;color:#4b5563;border:1px solid #e5e7eb;",
+        "done":    ("background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;", "✓ "),
+        "current": ("background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;", ""),
+        "pending": ("background:#f8f9fb;color:#94a3b8;border:1px solid #e2e8f0;", ""),
     }
 
     parts = []
     for i, (label, status) in enumerate(steps):
-        style = status_styles.get(status, status_styles["pending"])
+        style, prefix = status_styles.get(status, status_styles["pending"])
         parts.append(
-            f"""
-            <div style="display:flex;align-items:center;">
-                <div style="padding:8px 12px;border-radius:999px;{style}font-size:0.9rem;font-weight:600;white-space:nowrap;">
-                    {label}
-                </div>
-            </div>
-            """
+            f'<div style="display:flex;align-items:center;">'
+            f'<div style="padding:5px 11px;border-radius:999px;{style}'
+            f'font-size:0.8rem;font-weight:600;white-space:nowrap;">'
+            f'{prefix}{_html.escape(label)}'
+            f'</div></div>'
         )
         if i < len(steps) - 1:
-            parts.append(
-                """<div style="font-size:1.2rem;color:#9ca3af;padding:0 6px;">→</div>""")
+            parts.append('<div style="font-size:1rem;color:#cbd5e1;padding:0 4px;">→</div>')
 
     return f"""
-    <html>
-    <body style="margin:0;padding:0;font-family:Arial,sans-serif;background:transparent;">
-        <div style="padding:12px 14px;border:1px solid rgba(120,120,120,0.15);border-radius:12px;background:rgba(250,250,250,0.02);">
-            <div style="font-size:1rem;font-weight:700;margin-bottom:12px;">Case Timeline</div>
-            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;">
-                {''.join(parts)}
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+<html>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#ffffff;">
+  <div style="padding:10px 14px;border:1px solid #e2e8f0;border-radius:8px;background:#ffffff;">
+    <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;
+      letter-spacing:0.07em;color:#94a3b8;margin-bottom:10px;">Case Timeline</div>
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;">
+      {''.join(parts)}
+    </div>
+  </div>
+</body>
+</html>"""
 
+
+# ── AI output components ────────────────────────────────────────────────────────
+
+def render_ai_answer(text: str):
+    escaped = _html.escape(str(text))
+    st.markdown(f'<div class="riq-answer">{escaped}</div>', unsafe_allow_html=True)
+
+
+def render_ai_output(text: str):
+    escaped = _html.escape(str(text))
+    st.markdown(f'<div class="riq-output">{escaped}</div>', unsafe_allow_html=True)
+
+
+# ── Footer ──────────────────────────────────────────────────────────────────────
 
 def render_insight_footer(metrics: dict, top_category: str, top_state: str):
     st.markdown("---")
@@ -111,14 +206,15 @@ def render_insight_footer(metrics: dict, top_category: str, top_state: str):
 - **{metrics["critical_cases"]:,}** cases are currently marked **Critical** and should be handled first.
 - **{metrics["open_cases"]:,}** cases are currently open, while **{metrics["closed_cases"]:,}** have already been resolved.
 - **{format_currency(metrics["protected_revenue"])}** in revenue has already been protected across closed flagged cases.
-- **{top_category}** is the strongest return-abuse category.
-- **{top_state}** has the highest average fraud score.
+- **{_html.escape(str(top_category))}** is the strongest return-abuse category.
+- **{_html.escape(str(top_state))}** has the highest average fraud score.
 """
 
     st.info(insight_text)
 
     st.markdown("""
-<div class="section-note">
-    <b>Pilot with Aignita:</b> Interested in using RiskIQ for your store or risk operations workflow? Reach out to discuss a pilot or custom implementation.
+<div class="riq-note" style="border-left-color:#16a34a;margin-top:0.25rem;">
+  <b>Pilot with Aignita:</b> Interested in using RiskIQ for your store or risk operations workflow?
+  Reach out to discuss a pilot or custom implementation.
 </div>
 """, unsafe_allow_html=True)

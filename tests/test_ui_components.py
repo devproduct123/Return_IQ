@@ -33,9 +33,9 @@ def test_render_timeline_html_contains_steps_and_status_styles():
     assert "Case Created" in html
     assert "Review Queue" in html
     assert "Pending Resolution" in html
-    assert "background:#dcfce7" in html
-    assert "background:#dbeafe" in html
-    assert "background:#f3f4f6" in html
+    assert "background:#f0fdf4" in html
+    assert "background:#eff6ff" in html
+    assert "background:#f8f9fb" in html
 
 
 def test_render_hero_summary_preserves_text(monkeypatch):
@@ -71,6 +71,8 @@ def test_render_case_detail_box_preserves_case_fields(monkeypatch):
         "customer_id": "C1000",
         "order_date": "2025-01-01",
         "risk_type_display": "Fraud",
+        "priority_tier": "Critical",
+        "case_status": "Open",
         "product_name": "Hoodie",
         "product_category": "Apparel",
         "state": "CA",
@@ -88,10 +90,12 @@ def test_render_case_detail_box_preserves_case_fields(monkeypatch):
 
     rendered = fake_st.markdowns[0]
     assert rendered["unsafe_allow_html"] is True
-    assert "Case Summary: O00001" in rendered["body"]
-    assert "<b>Customer ID:</b> C1000" in rendered["body"]
-    assert "<b>Order Date:</b> 2025-01-01" in rendered["body"]
-    assert "<b>AI Suggested Next Step:</b> Pause shipment and verify customer" in rendered["body"]
+    assert "O00001" in rendered["body"]
+    assert "C1000" in rendered["body"]
+    assert "2025-01-01" in rendered["body"]
+    assert "Why Flagged" in rendered["body"]
+    assert "AI Suggested Next Step" in rendered["body"]
+    assert "Pause shipment and verify customer" in rendered["body"]
 
 
 def test_render_insight_footer_preserves_info_and_pilot_note(monkeypatch):
