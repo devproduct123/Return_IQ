@@ -47,7 +47,7 @@ def test_render_hero_summary_preserves_text(monkeypatch):
             "flagged_pct": 12.3,
             "revenue_at_risk": 1200.0,
             "protected_revenue": 500.0,
-            "critical_cases": 4,
+            "high_cases": 4,
         },
         "Apparel",
         "CA",
@@ -58,7 +58,7 @@ def test_render_hero_summary_preserves_text(monkeypatch):
     assert "Risk Intelligence Summary" in rendered["body"]
     assert "$1.2K" in rendered["body"]
     assert "$500" in rendered["body"]
-    assert "Return-abuse pressure is highest in <b>Apparel</b>" in rendered["body"]
+    assert "Return risk pressure is highest in <b>Apparel</b>" in rendered["body"]
     assert "fraud pressure is strongest in" in rendered["body"]
 
 
@@ -105,7 +105,7 @@ def test_render_insight_footer_preserves_info_and_pilot_note(monkeypatch):
     ui_components.render_insight_footer(
         {
             "flagged_pct": 10.0,
-            "critical_cases": 2,
+            "high_cases": 2,
             "open_cases": 3,
             "closed_cases": 4,
             "protected_revenue": 1500.0,
@@ -116,5 +116,6 @@ def test_render_insight_footer_preserves_info_and_pilot_note(monkeypatch):
 
     assert fake_st.subheaders == ["AI Risk Insights"]
     assert "**10.0%** of filtered orders are flagged high risk" in fake_st.infos[0]
+    assert "**2** cases are currently marked **High** priority" in fake_st.infos[0]
     assert "**$1.5K** in revenue has already been protected" in fake_st.infos[0]
     assert "Pilot with Aignita" in fake_st.markdowns[-1]["body"]

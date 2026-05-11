@@ -21,15 +21,15 @@ def _valid_row(**overrides):
         "discount_used": 0,
         "expedited_shipping": 0,
         "fraud_score": 0.1,
-        "return_abuse_score": 0.2,
+        "return_risk_score": 0.2,
         "unified_risk_score": 0.2,
         "risk_level": "High",
         "risk_type": "Returns",
         "recommended_action": "Review Return Behavior",
-        "ai_agent_next_step": "Generate return-abuse summary",
+        "ai_agent_next_step": "Generate return risk summary",
         "action_owner": "Returns Ops",
         "automation_level": "Assisted",
-        "risk_reason_summary": "elevated return-abuse score",
+        "risk_reason_summary": "elevated return risk score",
         "priority_tier": "High",
         "case_status": "Open",
         "workflow_stage": "Review Queue",
@@ -45,8 +45,19 @@ def test_load_data_validates_and_adds_display_type(tmp_path):
     df = load_data(str(path))
 
     assert list(df.columns).count("risk_type_display") == 1
-    assert df.loc[0, "risk_type_display"] == "Return Abuse"
+    assert df.loc[0, "risk_type_display"] == "Return Risk"
     assert pd.api.types.is_datetime64_any_dtype(df["order_date"])
+
+
+def test_load_data_maps_missing_risk_type_to_none_display(tmp_path):
+    path = tmp_path / "transactions.csv"
+    pd.DataFrame([_valid_row(risk_type=None)]).to_csv(path, index=False)
+
+    df = load_data(str(path))
+
+    assert df.loc[0, "risk_type_display"] == "None"
+
+
 
 
 def test_load_data_drops_invalid_dates(tmp_path):

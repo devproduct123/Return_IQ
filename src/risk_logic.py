@@ -3,7 +3,7 @@ import pandas as pd
 from src.metrics import format_currency, safe_top_index
 
 
-PRIORITY_ORDER = {"Critical": 0, "High": 1, "Moderate": 2, "Low": 3}
+PRIORITY_ORDER = {"High": 0, "Moderate": 1, "Low": 2}
 
 
 def build_case_timeline(case_row: pd.Series):
@@ -17,12 +17,11 @@ def build_case_timeline(case_row: pd.Series):
         "Verification Sent": "current",
         "Awaiting Customer Response": "current",
         "Review Queue": "current",
-        "Policy Applied": "current",
+        "High Returner Tagged": "current",
         "Awaiting Item Inspection": "current",
         "Escalated": "current",
         "Senior Review": "current",
         "Watchlist Monitoring": "current",
-        "Action Applied": "done",
         "Auto Approved": "done",
     }
 
@@ -87,11 +86,11 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         ].sum()
     )
     critical_open = data[
-        (data["priority_tier"] == "Critical") & (data["case_status"] == "Open")
+        (data["priority_tier"] == "High") & (data["case_status"] == "Open")
     ]
 
     top_category = safe_top_index(
-        data.groupby("product_category")["return_abuse_score"]
+        data.groupby("product_category")["return_risk_score"]
         .mean()
         .sort_values(ascending=False)
     )
@@ -102,6 +101,8 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         .sort_values(ascending=False)
     )
 
+    high_cases = int((data["priority_tier"] == "High").sum())
+
     top_action = safe_top_index(data["recommended_action"].value_counts())
 
     if "summary" in q or "summarize" in q or "overall" in q:
@@ -109,22 +110,22 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
             f"In the current filtered view, {flagged_orders:,} out of {total_orders:,} orders are flagged high risk. "
             f"Revenue at risk is {format_currency(revenue_at_risk)}. "
             f"Protected revenue on closed flagged cases is {format_currency(protected_revenue)}. "
-            f"There are {open_cases:,} open cases. "
-            f"Return abuse is highest in {top_category}, fraud risk is strongest in {top_state}, "
+            f"There are {open_cases:,} open cases and {high_cases:,} high-priority cases. "
+            f"Return risk is highest in {top_category}, fraud risk is strongest in {top_state}, "
             f"and the most common recommended action is {top_action}."
         )
 
     if "return" in q and ("category" in q or "product" in q or "driver" in q):
         top_return_products = (
-            data.groupby("product_name")["return_abuse_score"]
+            data.groupby("product_name")["return_risk_score"]
             .mean()
             .sort_values(ascending=False)
             .head(3)
             .index.tolist()
         )
         return (
-            f"The highest return-abuse category is {top_category}. "
-            f"Top products by return-abuse score are: {', '.join(top_return_products)}."
+            f"The highest return risk category is {top_category}. "
+            f"Top products by return risk score are: {', '.join(top_return_products)}."
         )
 
     if "fraud" in q and ("state" in q or "where" in q or "location" in q):
@@ -145,9 +146,9 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
 
     if "priority" in q or "review first" in q or "what should i do first" in q:
         if critical_open.empty:
-            return "There are no open critical cases in the current filtered view. The next priority is High-priority open cases."
+            return "There are no open high-priority cases in the current filtered view."
         return (
-            f"There are {len(critical_open):,} open critical cases that should be reviewed first. "
+            f"There are {len(critical_open):,} open high-priority cases that should be reviewed first. "
             f"Focus on the highest-value orders with the highest unified risk scores."
         )
 
@@ -161,7 +162,7 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         return f"There are currently {open_cases:,} open cases in the filtered view."
 
     return (
-        "I can help summarize current risk, identify top fraud states, top return-abuse categories or products, "
+        "I can help summarize current risk, identify top fraud states, top return risk categories or products, "
         "revenue at risk, protected revenue, open cases, and what the ops team should prioritize first."
     )
 
@@ -181,7 +182,7 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
     next_step = case_row["ai_agent_next_step"]
     risk_reason = case_row["risk_reason_summary"]
     fraud_score = float(case_row["fraud_score"])
-    return_score = float(case_row["return_abuse_score"])
+    return_score = float(case_row["return_risk_score"])
     unified_score = float(case_row["unified_risk_score"])
     order_value = float(case_row["order_value"])
     past_returns = int(case_row["past_returns"])
@@ -203,7 +204,7 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
     if "why" in q or "flagged" in q or "reason" in q:
         return (
             f"This case was flagged as {risk_type}. "
-            f"Fraud score is {fraud_score:.3f}, return-abuse score is {return_score:.3f}, "
+            f"Fraud score is {fraud_score:.3f}, return risk score is {return_score:.3f}, "
             f"and unified risk score is {unified_score:.3f}. "
             f"Primary reason: {risk_reason}"
         )
@@ -223,7 +224,7 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
 
     if "return" in q:
         return (
-            f"Return-abuse score for order {order_id} is {return_score:.3f}. "
+            f"Return risk score for order {order_id} is {return_score:.3f}. "
             f"The product is {product_name} in category {product_category}, and the customer has {past_returns} past returns."
         )
 
@@ -238,5 +239,5 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
 
     return (
         f"I can help explain why order {order_id} was flagged, summarize the case, recommend the next step, "
-        f"or answer questions about fraud signals, return-abuse signals, verification, and escalation."
+        f"or answer questions about fraud signals, return risk signals, verification, and escalation."
     )

@@ -8,7 +8,7 @@ At a high level, `app.py` does five jobs:
 - Defines the Streamlit page styling and shared Plotly chart styling.
 - Builds dashboard context and selected-case context for AI prompts.
 - Applies sidebar filters and computes metrics for the filtered dataset.
-- Renders the six main product tabs: Overview, FraudIQ, ReturnIQ, Action Center, Ops Queue, and AI Risk Copilot.
+- Renders the six main product tabs: Overview, Fraud Risk, Return Abuse, Recommended Actions, Review Queue, and Risk Copilot.
 
 ## Imports
 
@@ -225,7 +225,7 @@ Any exception is caught and returned as `"Groq request failed: ..."` so the UI c
 def ask_risk_copilot(question, dashboard_data, selected_case=None) -> str:
 ```
 
-This function powers the broader AI Risk Copilot tab.
+This function powers the broader Risk Copilot tab.
 
 It builds:
 
@@ -247,7 +247,7 @@ The final prompt combines dashboard context, case context, and the merchant ques
 def ask_case_copilot(question, selected_case) -> str:
 ```
 
-This function powers AI Analyst mode inside the Ops Queue selected-case workflow.
+This function powers AI Analyst mode inside the Review Queue selected-case workflow.
 
 It builds selected-case context and asks the LLM to answer as a case analyst assistant. The prompt is narrower than the dashboard Copilot prompt. It focuses on:
 
@@ -264,8 +264,8 @@ def generate_ai_output(artifact_type, dashboard_data, selected_case=None) -> str
 
 This function creates longer generated outputs used by two areas:
 
-- Case Action Assistant in Ops Queue.
-- Strategic Outputs in AI Risk Copilot.
+- Case Action Assistant in Review Queue.
+- Strategic Outputs in Risk Copilot.
 
 It supports four artifact types:
 
@@ -391,11 +391,11 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([...])
 The tabs are:
 
 - Overview
-- FraudIQ
-- ReturnIQ
-- Action Center
-- Ops Queue
-- AI Risk Copilot
+- Fraud Risk
+- Return Abuse
+- Recommended Actions
+- Review Queue
+- Risk Copilot
 
 Each tab logs a `tab_view` event the first time it is seen.
 
@@ -448,9 +448,9 @@ The app counts workflow stages for high-risk orders and renders another bar char
 
 This helps show where high-risk work is sitting operationally.
 
-## Tab 2: FraudIQ
+## Tab 2: Fraud Risk
 
-FraudIQ focuses only on rows where `risk_type_display == "Fraud"`.
+Fraud Risk focuses only on rows where `risk_type_display == "Fraud"`.
 
 If no fraud rows exist under the current filters, the tab shows a warning.
 
@@ -468,9 +468,9 @@ Then it renders two charts:
 
 Finally, it displays the top 50 fraud rows sorted by fraud score and order value. The table includes identifiers, scores, priority, status, workflow stage, risk reason, recommended action, and AI next step.
 
-## Tab 3: ReturnIQ
+## Tab 3: Return Abuse
 
-ReturnIQ focuses only on rows where `risk_type_display == "Return Abuse"`.
+Return Abuse focuses only on rows where `risk_type_display == "Return Abuse"`.
 
 If no return-abuse rows exist under the current filters, the tab shows a warning.
 
@@ -490,9 +490,9 @@ The product chart is limited to the top 10 products so it stays readable.
 
 Finally, it displays the top 50 return-abuse rows sorted by return-abuse score and order value.
 
-## Tab 4: Action Center
+## Tab 4: Recommended Actions
 
-Action Center focuses on operational work and outcomes.
+Recommended Actions focuses on operational work and outcomes.
 
 It first creates:
 
@@ -550,9 +550,9 @@ If there are closed flagged cases, the app shows the top 50 resolved cases sorte
 
 If there are none, it shows an informational message.
 
-## Tab 5: Ops Queue
+## Tab 5: Review Queue
 
-Ops Queue is the main analyst workbench for open high-risk cases.
+Review Queue is the main analyst workbench for open high-risk cases.
 
 It starts with:
 
@@ -592,7 +592,7 @@ The app logs selected-case changes and stores the selected case in:
 st.session_state["selected_case"]
 ```
 
-This session-state value is later used by the AI Risk Copilot tab so the broader Copilot can include the selected case.
+This session-state value is later used by the Risk Copilot tab so the broader Copilot can include the selected case.
 
 The selected case area renders:
 
@@ -634,9 +634,9 @@ This section generates selected-case artifacts:
 
 Each button logs a `case_artifact_generated` event, calls `generate_ai_output`, stores the result in `st.session_state["case_output"]`, and displays it with `render_ai_output`.
 
-## Tab 6: AI Risk Copilot
+## Tab 6: Risk Copilot
 
-The AI Risk Copilot tab handles broader portfolio-level questions and strategic outputs.
+The Risk Copilot tab handles broader portfolio-level questions and strategic outputs.
 
 It starts with sample question buttons that set `st.session_state["copilot_question"]`:
 
@@ -658,7 +658,7 @@ If no Groq API key is configured, the app explains that Quick Insights still wor
 
 ### Selected Case Fallback
 
-The Copilot tries to include a selected case from Ops Queue:
+The Copilot tries to include a selected case from Review Queue:
 
 ```python
 selected_case_for_ai = st.session_state.get("selected_case", None)
@@ -733,7 +733,7 @@ The app uses `st.session_state` for several cross-rerun values:
 - `event_log`: list of demo events.
 - `last_filters`: previous filter set used for change logging.
 - `last_selected_order_id`: previous selected case used for change logging.
-- `selected_case`: selected Ops Queue case reused by AI Risk Copilot.
+- `selected_case`: selected Review Queue case reused by Risk Copilot.
 - `case_question`: prefilled or typed case question.
 - `last_case_question_logged`: prevents duplicate case-question logs.
 - `case_output`: generated selected-case artifact.
@@ -767,4 +767,3 @@ Important gaps include:
 - Optional LLM calls may send filtered dashboard and selected-case context to Groq.
 
 Before production use, the app would need privacy review, redaction, access controls, persistent storage, observability, and model/provider governance.
-

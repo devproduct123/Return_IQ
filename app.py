@@ -32,8 +32,10 @@ from src.ui_components import (
     render_demo_banner,
     render_hero_summary,
     render_insight_footer,
+    render_merchant_context_bar,
     render_outcome_summary,
     render_page_header,
+    render_today_action_panel,
     render_timeline_html,
 )
 
@@ -180,6 +182,44 @@ st.markdown("""
     color: #1d4ed8;
 }
 
+/* Merchant context and action brief */
+.riq-context-bar {
+    display: grid;
+    grid-template-columns: 1.2fr 0.9fr 1.4fr 1fr 1fr;
+    gap: 0.9rem;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+.riq-action-panel {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin: 1rem 0;
+}
+.riq-action-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.8rem;
+}
+.riq-action-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-top: 3px solid #4f46e5;
+    border-radius: 7px;
+    padding: 0.85rem;
+    min-height: 8rem;
+}
+@media (max-width: 900px) {
+    .riq-context-bar,
+    .riq-action-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* AI answer area */
 .riq-answer {
     background: #f0fdf4;
@@ -230,8 +270,40 @@ st.markdown("""
 # ── Chart styling ───────────────────────────────────────────────────────────────
 
 CHART_COLORS = ["#4f46e5", "#d97706", "#16a34a", "#dc2626", "#0284c7", "#7c3aed", "#64748b"]
-PRIORITY_COLORS = {"Critical": "#dc2626", "High": "#ea580c", "Moderate": "#d97706", "Low": "#16a34a"}
-RISK_TYPE_COLORS = {"Fraud": "#4f46e5", "Return Abuse": "#d97706"}
+PRIORITY_COLORS = {"High": "#dc2626", "Moderate": "#d97706", "Low": "#16a34a"}
+RISK_TYPE_COLORS = {"Fraud Risk": "#4f46e5", "Return Risk": "#d97706"}
+DEMO_MERCHANT_NAME = "Demo Store"
+DEMO_PLATFORM = "Shopify"
+DEMO_LAST_SYNC = "Today, 9:42 AM"
+
+# Demo scenarios — each entry overrides specific filter session-state keys.
+# All unlisted keys reset to "all options selected".
+DEMO_SCENARIOS: dict[str, dict] = {
+    "All Data": {},
+    "Fraud Risk — FL / NJ": {
+        "filt_risk_type": ["Fraud Risk"],
+        "filt_state": ["FL", "NJ"],
+        "filt_case_status": ["Open"],
+        "filt_priority": ["High"],
+    },
+    "Return Risk — Apparel": {
+        "filt_risk_type": ["Return Risk"],
+        "filt_category": ["Apparel"],
+        "filt_case_status": ["Open"],
+    },
+    "High Risk Open Cases": {
+        "filt_priority": ["High"],
+        "filt_case_status": ["Open"],
+    },
+    "Fraud Risk — All Open": {
+        "filt_risk_type": ["Fraud Risk"],
+        "filt_case_status": ["Open"],
+    },
+    "Return Risk — All Open": {
+        "filt_risk_type": ["Return Risk"],
+        "filt_case_status": ["Open"],
+    },
+}
 
 
 def style_chart(
@@ -291,6 +363,52 @@ def style_chart(
     return fig
 
 
+def build_today_actions(
+    data: pd.DataFrame,
+    metrics: dict,
+    top_category: str,
+    top_state: str,
+) -> list[dict]:
+    open_high_risk = get_open_high_risk_cases(data)
+    open_revenue = float(open_high_risk["order_value"].sum()) if not open_high_risk.empty else 0.0
+    verification_count = int(
+        (data["recommended_action"].str.contains("verify", case=False, na=False)).sum()
+    )
+
+    return [
+        {
+            "label": "First Priority",
+            "title": "Review high-risk open orders before fulfillment",
+            "body": (
+                "Start with the highest-priority open cases so teams can hold, restrict, "
+                "or release orders before avoidable loss accumulates."
+            ),
+            "metric": f'{metrics["high_cases"]:,} high-risk',
+            "accent": "#dc2626",
+        },
+        {
+            "label": "Revenue Control",
+            "title": "Protect open revenue needing review",
+            "body": (
+                "Use the review queue to resolve the open high-risk orders currently "
+                "driving the largest outstanding exposure."
+            ),
+            "metric": format_currency(open_revenue),
+            "accent": "#4f46e5",
+        },
+        {
+            "label": "Policy Signal",
+            "title": f"Tighten review around {top_category}",
+            "body": (
+                f"Return-abuse pressure is highest in {top_category}, while fraud pressure "
+                f"is strongest in {top_state}. Use those signals for policy and ops tuning."
+            ),
+            "metric": f"{verification_count:,} verify",
+            "accent": "#d97706",
+        },
+    ]
+
+
 # ── Bootstrap ───────────────────────────────────────────────────────────────────
 
 load_dotenv()
@@ -310,8 +428,7 @@ def get_session_id() -> str:
 
 
 def get_user_id() -> str:
-    viewer_email = st.session_state.get("viewer_email", "").strip().lower()
-    return viewer_email if viewer_email else "anonymous"
+    return "anonymous"
 
 
 def log_event(event_name: str, details: dict | None = None):
@@ -355,9 +472,9 @@ def build_dashboard_context(data: pd.DataFrame) -> str:
     revenue_at_risk = float(
         data.loc[data["risk_level"] == "High", "order_value"].sum())
     open_cases = int((data["case_status"] == "Open").sum())
-    critical_cases = int((data["priority_tier"] == "Critical").sum())
-    fraud_cases = int((data["risk_type_display"] == "Fraud").sum())
-    return_cases = int((data["risk_type_display"] == "Return Abuse").sum())
+    high_priority_cases = int((data["priority_tier"] == "High").sum())
+    fraud_cases = int((data["risk_type_display"] == "Fraud Risk").sum())
+    return_cases = int((data["risk_type_display"] == "Return Risk").sum())
     protected_revenue = float(
         data.loc[
             (data["risk_level"] == "High") & (data["case_status"] == "Closed"),
@@ -366,7 +483,7 @@ def build_dashboard_context(data: pd.DataFrame) -> str:
     )
 
     top_category = (
-        data.groupby("product_category")["return_abuse_score"]
+        data.groupby("product_category")["return_risk_score"]
         .mean()
         .sort_values(ascending=False)
         .head(3)
@@ -391,7 +508,7 @@ Revenue at risk: ${revenue_at_risk:,.0f}
 Protected revenue: ${protected_revenue:,.0f}
 
 Open cases: {open_cases}
-Critical cases: {critical_cases}
+High-priority cases: {high_priority_cases}
 
 Fraud cases: {fraud_cases}
 Return abuse cases: {return_cases}
@@ -425,7 +542,7 @@ Workflow Stage: {case_row["workflow_stage"]}
 Order Value: ${case_row["order_value"]}
 
 Fraud Score: {case_row["fraud_score"]}
-Return Abuse Score: {case_row["return_abuse_score"]}
+Return Risk Score: {case_row["return_risk_score"]}
 Unified Risk Score: {case_row["unified_risk_score"]}
 
 Past Returns: {case_row["past_returns"]}
@@ -537,14 +654,14 @@ Do not claim actions were executed.
 Create a short merchant-facing risk summary for the current dashboard view.
 Include:
 - current risk situation
-- biggest fraud/return-abuse drivers
+- biggest fraud/return risk drivers
 - revenue at risk vs protected revenue
 - what should be prioritized next
 Use plain business language.
 """,
         "policy_recommendation": """
 Write a short policy recommendation memo for the merchant based on the dashboard context.
-Focus on return-abuse and fraud controls.
+Focus on return risk and fraud controls.
 Include:
 - 3 recommended policy changes
 - expected benefit
@@ -563,6 +680,16 @@ Include:
 - what evidence matters most
 - whether the case should be escalated, verified, monitored, or closed
 Keep it practical and concise.
+""",
+        "merchant_action_brief": """
+Create a merchant-facing action brief for the current dashboard view.
+Include:
+- current risk situation in plain business language
+- top 3 actions the merchant should take today
+- which order groups, product categories, locations, or actions are driving risk
+- revenue at risk and protected revenue
+- one operational next step and one policy next step
+Avoid technical model language and do not claim actions were executed.
 """,
     }
 
@@ -591,13 +718,6 @@ render_page_header()
 
 log_once("session_started_logged", "session_start", {"app": "Aignita RiskIQ"})
 
-viewer_email = st.sidebar.text_input(
-    "Viewer Email (for demo tracking)",
-    value=st.session_state.get("viewer_email", "")
-).strip().lower()
-if viewer_email:
-    st.session_state["viewer_email"] = viewer_email
-
 if df is None:
     st.error("data/transactions.csv not found.")
     st.code("python generate_data.py")
@@ -605,6 +725,45 @@ if df is None:
 
 render_demo_banner()
 
+# ── Filter state initialization ──────────────────────────────────────────────────
+# Build defaults once (all options selected) so scenario changes can reset cleanly.
+_RISK_TYPE_OPTIONS = sorted(df["risk_type_display"].unique().tolist())
+_filter_defaults: dict = {
+    "filt_risk_type":   _RISK_TYPE_OPTIONS,
+    "filt_category":    sorted(df["product_category"].unique()),
+    "filt_payment":     sorted(df["payment_method"].unique()),
+    "filt_state":       sorted(df["state"].unique()),
+    "filt_priority":    sorted(df["priority_tier"].unique()),
+    "filt_action":      sorted(df["recommended_action"].unique()),
+    "filt_workflow":    sorted(df["workflow_stage"].unique()),
+    "filt_case_status": sorted(df["case_status"].unique()),
+}
+if "filt_init" not in st.session_state:
+    for _k, _v in _filter_defaults.items():
+        st.session_state[_k] = _v
+    st.session_state["filt_init"] = True
+    st.session_state["_active_scenario"] = "All Data"
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────────
+st.sidebar.markdown("### Demo Scenario")
+_scenario_names = list(DEMO_SCENARIOS.keys())
+_scenario_idx = _scenario_names.index(st.session_state.get("_active_scenario", "All Data"))
+scenario = st.sidebar.selectbox(
+    "Load a preset",
+    options=_scenario_names,
+    index=_scenario_idx,
+    label_visibility="collapsed",
+    key="_scenario_selector",
+)
+if st.session_state.get("_active_scenario") != scenario:
+    for _k, _v in _filter_defaults.items():
+        st.session_state[_k] = _v
+    for _k, _v in DEMO_SCENARIOS[scenario].items():
+        st.session_state[_k] = _v
+    st.session_state["_active_scenario"] = scenario
+    st.rerun()
+
+st.sidebar.markdown("---")
 st.sidebar.header("Filters")
 st.sidebar.caption("Filters apply across all tabs and AI outputs.")
 
@@ -618,46 +777,52 @@ date_range = st.sidebar.date_input(
     max_value=date_max
 )
 
+risk_type_filter = st.sidebar.multiselect(
+    "Risk Type",
+    options=_RISK_TYPE_OPTIONS,
+    key="filt_risk_type",
+)
+
 category_filter = st.sidebar.multiselect(
     "Product Category",
     options=sorted(df["product_category"].unique()),
-    default=sorted(df["product_category"].unique())
+    key="filt_category",
 )
 
 payment_filter = st.sidebar.multiselect(
     "Payment Method",
     options=sorted(df["payment_method"].unique()),
-    default=sorted(df["payment_method"].unique())
+    key="filt_payment",
 )
 
 state_filter = st.sidebar.multiselect(
     "State",
     options=sorted(df["state"].unique()),
-    default=sorted(df["state"].unique())
+    key="filt_state",
 )
 
 priority_filter = st.sidebar.multiselect(
     "Priority Tier",
     options=sorted(df["priority_tier"].unique()),
-    default=sorted(df["priority_tier"].unique())
+    key="filt_priority",
 )
 
 action_filter = st.sidebar.multiselect(
     "Recommended Action",
     options=sorted(df["recommended_action"].unique()),
-    default=sorted(df["recommended_action"].unique())
+    key="filt_action",
 )
 
 workflow_filter = st.sidebar.multiselect(
     "Workflow Stage",
     options=sorted(df["workflow_stage"].unique()),
-    default=sorted(df["workflow_stage"].unique())
+    key="filt_workflow",
 )
 
 case_status_filter = st.sidebar.multiselect(
     "Case Status",
     options=sorted(df["case_status"].unique()),
-    default=sorted(df["case_status"].unique())
+    key="filt_case_status",
 )
 
 if isinstance(date_range, tuple) and len(date_range) == 2:
@@ -668,6 +833,7 @@ else:
 current_filters = {
     "start_date": str(start_date),
     "end_date": str(end_date),
+    "risk_type_filter": risk_type_filter,
     "category_filter": category_filter,
     "payment_filter": payment_filter,
     "state_filter": state_filter,
@@ -679,6 +845,7 @@ current_filters = {
 log_value_change("last_filters", "filters_changed", current_filters)
 
 filtered_df = df[
+    (df["risk_type_display"].isin(risk_type_filter)) &
     (df["state"].isin(state_filter)) &
     (df["product_category"].isin(category_filter)) &
     (df["payment_method"].isin(payment_filter)) &
@@ -697,7 +864,7 @@ if filtered_df.empty:
 metrics = compute_summary_metrics(filtered_df)
 
 top_category = safe_top_index(
-    filtered_df.groupby("product_category")["return_abuse_score"]
+    filtered_df.groupby("product_category")["return_risk_score"]
     .mean()
     .sort_values(ascending=False)
 )
@@ -708,6 +875,15 @@ top_state = safe_top_index(
     .sort_values(ascending=False)
 )
 
+review_window = f"{start_date} to {end_date}"
+render_merchant_context_bar(
+    DEMO_MERCHANT_NAME,
+    DEMO_PLATFORM,
+    review_window,
+    len(filtered_df),
+    DEMO_LAST_SYNC,
+)
+
 render_hero_summary(metrics, top_category, top_state)
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -715,19 +891,22 @@ c1.metric("Total Orders", f'{metrics["total_orders"]:,}')
 c2.metric("Flagged Orders", f'{metrics["flagged_orders"]:,}')
 c3.metric("Flagged %", f'{metrics["flagged_pct"]:.1f}%')
 c4.metric("Fraud Cases", f'{metrics["fraud_cases"]:,}')
-c5.metric("Return Abuse Cases", f'{metrics["return_cases"]:,}')
+c5.metric("Return Risk Cases", f'{metrics["return_cases"]:,}')
 c6.metric("Revenue at Risk", format_currency(metrics["revenue_at_risk"]))
+
+today_actions = build_today_actions(filtered_df, metrics, top_category, top_state)
+render_today_action_panel(today_actions)
 
 st.markdown("---")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["Overview", "FraudIQ", "ReturnIQ",
-        "Action Center", "Ops Queue", "AI Risk Copilot"]
+tab_ov, tab_rq, tab_fr, tab_rt, tab_ac, tab_cp = st.tabs(
+    ["Overview", "Review Queue", "Fraud Risk",
+        "Return Risk", "Recommended Actions", "Risk Copilot"]
 )
 
 # ── Tab 1: Overview ──────────────────────────────────────────────────────────────
 
-with tab1:
+with tab_ov:
     log_once("tab_overview_seen", "tab_view", {"tab": "Overview"})
     st.subheader("Executive Overview")
 
@@ -759,8 +938,7 @@ with tab1:
         )
 
     loss_exposure = (
-        filtered_df[filtered_df["risk_type_display"].isin(
-            ["Fraud", "Return Abuse"])]
+        filtered_df[filtered_df["risk_type_display"].isin(["Fraud Risk", "Return Risk"])]
         .groupby("risk_type_display", as_index=False)["order_value"]
         .sum()
         .sort_values("order_value", ascending=False)
@@ -785,7 +963,7 @@ with tab1:
     flagged_priority = (
         filtered_df[filtered_df["risk_level"] == "High"]["priority_tier"]
         .value_counts()
-        .reindex(["Critical", "High", "Moderate"], fill_value=0)
+        .reindex(["High", "Moderate"], fill_value=0)
         .reset_index()
     )
     flagged_priority.columns = ["priority_tier", "count"]
@@ -797,7 +975,7 @@ with tab1:
             labels={"priority_tier": "Priority Tier", "count": "Number of Cases"},
             color="priority_tier",
             color_discrete_map=PRIORITY_COLORS,
-            category_orders={"priority_tier": ["Critical", "High", "Moderate"]},
+            category_orders={"priority_tier": ["High", "Moderate"]},
         ), showlegend=False),
         use_container_width=True
     )
@@ -836,12 +1014,12 @@ with tab1:
             use_container_width=True
         )
 
-# ── Tab 2: FraudIQ ────────────────────────────────────────────────────────────────
+# ── Tab 3: Fraud Risk ─────────────────────────────────────────────────────────────
 
-with tab2:
-    log_once("tab_fraudiq_seen", "tab_view", {"tab": "FraudIQ"})
-    st.subheader("FraudIQ")
-    fraud_df = filtered_df[filtered_df["risk_type_display"] == "Fraud"].copy()
+with tab_fr:
+    log_once("tab_fraudiq_seen", "tab_view", {"tab": "Fraud Risk"})
+    st.subheader("Fraud Risk")
+    fraud_df = filtered_df[filtered_df["risk_type_display"] == "Fraud Risk"].copy()
 
     if fraud_df.empty:
         st.warning(
@@ -909,65 +1087,65 @@ with tab2:
             use_container_width=True
         )
 
-# ── Tab 3: ReturnIQ ───────────────────────────────────────────────────────────────
+# ── Tab 4: Return Risk ───────────────────────────────────────────────────────────
 
-with tab3:
-    log_once("tab_returniq_seen", "tab_view", {"tab": "ReturnIQ"})
-    st.subheader("ReturnIQ")
+with tab_rt:
+    log_once("tab_returniq_seen", "tab_view", {"tab": "Return Risk"})
+    st.subheader("Return Risk")
     returns_df = filtered_df[filtered_df["risk_type_display"]
-                             == "Return Abuse"].copy()
+                             == "Return Risk"].copy()
 
     if returns_df.empty:
         st.warning(
-            "No return-abuse transactions in the current filter selection.")
+            "No return risk transactions in the current filter selection.")
     else:
         rc1, rc2, rc3, rc4 = st.columns(4)
-        rc1.metric("Return Abuse Cases", f"{len(returns_df):,}")
+        rc1.metric("Return Risk Cases", f"{len(returns_df):,}")
         rc2.metric("Return Risk Revenue", format_currency(
             returns_df["order_value"].sum()))
         rc3.metric(
             "Top Return Category",
             safe_top_index(
                 returns_df.groupby("product_category")[
-                    "return_abuse_score"].mean().sort_values(ascending=False)
+                    "return_risk_score"].mean().sort_values(ascending=False)
             )
         )
         rc4.metric(
             "Top Return Product",
             safe_top_index(
                 returns_df.groupby("product_name")[
-                    "return_abuse_score"].mean().sort_values(ascending=False)
+                    "return_risk_score"].mean().sort_values(ascending=False)
             )
         )
 
         rcol1, rcol2 = st.columns(2)
 
         returns_by_category = returns_df.groupby("product_category", as_index=False)[
-            "return_abuse_score"].mean().sort_values("return_abuse_score", ascending=False)
+            "return_risk_score"].mean().sort_values("return_risk_score", ascending=False)
         returns_by_product = (
             returns_df.groupby("product_name", as_index=False)[
-                "return_abuse_score"]
+                "return_risk_score"]
             .mean()
-            .sort_values("return_abuse_score", ascending=False)
+            .sort_values("return_risk_score", ascending=False)
             .head(10)
         )
 
         rcol1.plotly_chart(
             style_chart(px.bar(
-                returns_by_category, x="product_category", y="return_abuse_score",
-                title="Return Abuse Score by Category",
+                returns_by_category, x="product_category", y="return_risk_score",
+                title="Return Risk Score by Category",
                 labels={"product_category": "Product Category",
-                        "return_abuse_score": "Average Return Abuse Score"},
+                        "return_risk_score": "Average Return Risk Score"},
                 color_discrete_sequence=["#d97706"],
             ), x_tickangle=-15),
             use_container_width=True
         )
         rcol2.plotly_chart(
             style_chart(px.bar(
-                returns_by_product, x="product_name", y="return_abuse_score",
-                title="Top Products by Return Abuse Score",
+                returns_by_product, x="product_name", y="return_risk_score",
+                title="Top Products by Return Risk Score",
                 labels={"product_name": "Product Name",
-                        "return_abuse_score": "Average Return Abuse Score"},
+                        "return_risk_score": "Average Return Risk Score"},
                 color_discrete_sequence=["#d97706"],
             ), x_tickangle=-30),
             use_container_width=True
@@ -976,25 +1154,25 @@ with tab3:
         returns_view = returns_df[
             [
                 "order_id", "customer_id", "order_date", "product_category", "product_name",
-                "past_returns", "order_value", "return_abuse_score", "priority_tier",
+                "past_returns", "order_value", "return_risk_score", "priority_tier",
                 "case_status", "workflow_stage", "risk_reason_summary",
                 "recommended_action", "ai_agent_next_step"
             ]
-        ].sort_values(["return_abuse_score", "order_value"], ascending=[False, False]).head(50)
+        ].sort_values(["return_risk_score", "order_value"], ascending=[False, False]).head(50)
 
         st.dataframe(
             returns_view.style.format({
                 "order_value": "${:,.2f}",
-                "return_abuse_score": "{:.3f}",
+                "return_risk_score": "{:.3f}",
             }),
             use_container_width=True
         )
 
-# ── Tab 4: Action Center ──────────────────────────────────────────────────────────
+# ── Tab 5: Recommended Actions ────────────────────────────────────────────────────
 
-with tab4:
-    log_once("tab_action_center_seen", "tab_view", {"tab": "Action Center"})
-    st.subheader("Action Center")
+with tab_ac:
+    log_once("tab_action_center_seen", "tab_view", {"tab": "Recommended Actions"})
+    st.subheader("Recommended Actions")
 
     open_flagged_cases = filtered_df[
         (filtered_df["risk_level"] == "High") & (
@@ -1121,11 +1299,11 @@ with tab4:
             use_container_width=True
         )
 
-# ── Tab 5: Ops Queue ──────────────────────────────────────────────────────────────
+# ── Tab 2: Review Queue ───────────────────────────────────────────────────────────
 
-with tab5:
-    log_once("tab_ops_queue_seen", "tab_view", {"tab": "Ops Queue"})
-    st.subheader("Ops Queue")
+with tab_rq:
+    log_once("tab_ops_queue_seen", "tab_view", {"tab": "Review Queue"})
+    st.subheader("Review Queue")
 
     flagged_df = sort_cases_by_priority(get_open_high_risk_cases(filtered_df))
 
@@ -1163,11 +1341,29 @@ with tab5:
     if flagged_df.empty:
         st.warning("No open cases in the current filter selection.")
     else:
+        st.markdown("### Top 5 Orders to Review First")
+        top_review_cases = flagged_df[
+            [
+                "order_id", "customer_id", "risk_type_display", "priority_tier",
+                "recommended_action", "order_value", "unified_risk_score",
+                "risk_reason_summary"
+            ]
+        ].rename(columns={"risk_type_display": "risk_type"}).head(5)
+
+        st.dataframe(
+            top_review_cases.style.format({
+                "order_value": "${:,.2f}",
+                "unified_risk_score": "{:.3f}",
+            }),
+            use_container_width=True
+        )
+
+        st.markdown("### Full Review Queue")
         open_case_view = flagged_df[
             [
                 "order_id", "customer_id", "order_date", "product_category", "product_name",
                 "country", "state", "payment_method", "order_value",
-                "fraud_score", "return_abuse_score", "unified_risk_score",
+                "fraud_score", "return_risk_score", "unified_risk_score",
                 "risk_type_display", "priority_tier", "case_status", "workflow_stage",
                 "risk_reason_summary", "recommended_action", "ai_agent_next_step",
                 "action_owner", "automation_level"
@@ -1178,7 +1374,7 @@ with tab5:
             open_case_view.style.format({
                 "order_value": "${:,.2f}",
                 "fraud_score": "{:.3f}",
-                "return_abuse_score": "{:.3f}",
+                "return_risk_score": "{:.3f}",
                 "unified_risk_score": "{:.3f}",
             }),
             use_container_width=True
@@ -1216,8 +1412,8 @@ with tab5:
         signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(5)
         signal_col1.metric(
             "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
-        signal_col2.metric("Return Abuse Score",
-                           f'{float(selected_case["return_abuse_score"]):.3f}')
+        signal_col2.metric("Return Risk Score",
+                           f'{float(selected_case["return_risk_score"]):.3f}')
         signal_col3.metric("Unified Risk Score",
                            f'{float(selected_case["unified_risk_score"]):.3f}')
         signal_col4.metric(
@@ -1246,17 +1442,18 @@ with tab5:
             st.session_state["case_question"] = "Summarize this case."
         if case_sample_cols2[1].button("Explain fraud signals"):
             st.session_state["case_question"] = "Explain the fraud signals in this case."
-        if case_sample_cols2[2].button("Explain return-abuse signals"):
-            st.session_state["case_question"] = "Explain the return-abuse signals in this case."
+        if case_sample_cols2[2].button("Explain return risk signals"):
+            st.session_state["case_question"] = "Explain the return risk signals in this case."
 
         case_question = st.text_input(
             "Ask about the selected case",
-            value=st.session_state.get("case_question", "")
+            value=st.session_state.get("case_question", "Why was this case flagged?")
         )
 
         case_mode = st.radio(
             "Case Response Mode",
             ["AI Analyst", "Quick Case Insights"],
+            index=1,
             horizontal=True,
             key="case_mode_radio"
         )
@@ -1329,12 +1526,12 @@ with tab5:
             st.markdown("#### Generated Case Output")
             render_ai_output(st.session_state["case_output"])
 
-# ── Tab 6: AI Risk Copilot ────────────────────────────────────────────────────────
+# ── Tab 6: Risk Copilot ───────────────────────────────────────────────────────────
 
-with tab6:
-    log_once("tab_ai_copilot_seen", "tab_view", {"tab": "AI Risk Copilot"})
-    st.subheader("AI Risk Copilot")
-    st.markdown("Use Copilot to **ask broader portfolio questions** and **generate strategic outputs** for merchant and policy workflows.")
+with tab_cp:
+    log_once("tab_ai_copilot_seen", "tab_view", {"tab": "Risk Copilot"})
+    st.subheader("Risk Copilot")
+    st.markdown("Use Copilot to **ask broader portfolio questions** and **generate merchant-ready outputs** for risk, policy, and operations workflows.")
 
     st.markdown("### Ask Copilot")
     sample_cols = st.columns(3)
@@ -1360,13 +1557,13 @@ with tab6:
 
     copilot_mode = st.radio(
         "Response Mode",
-        ["AI Copilot", "Quick Insights"],
+        ["Quick Insights", "AI Copilot"],
         horizontal=True
     )
 
     if not GROQ_API_KEY:
         st.caption(
-            "AI Copilot mode requires a configured GROQ_API_KEY. Quick Insights works without it.")
+            "Risk Copilot mode requires a configured GROQ_API_KEY. Quick Insights works without it.")
 
     if question:
         if st.session_state.get("last_copilot_question_logged") != {
@@ -1392,16 +1589,16 @@ with tab6:
         if used_fallback_case:
             st.markdown("""
 <div class="riq-demo-banner">
-  No case was manually selected in Ops Queue. Copilot is using the highest-priority open case from the current filters.
+  No case was manually selected in Review Queue. Copilot is using the highest-priority open case from the current filters.
 </div>
 """, unsafe_allow_html=True)
 
         with st.spinner("Copilot thinking..."):
-            if copilot_mode == "AI Copilot":
+            if copilot_mode == "Quick Insights":
+                answer = answer_risk_question(question, filtered_df)
+            else:
                 answer = ask_risk_copilot(
                     question, filtered_df, selected_case_for_ai)
-            else:
-                answer = answer_risk_question(question, filtered_df)
 
         st.markdown("### Copilot Answer")
         render_ai_answer(answer)
@@ -1411,8 +1608,20 @@ with tab6:
     st.caption(
         "Create merchant-facing and policy-oriented outputs from the current dashboard view.")
 
-    ag1, ag2 = st.columns(2)
+    ag1, ag2, ag3 = st.columns(3)
     with ag1:
+        if st.button("Generate Merchant Action Brief"):
+            log_event("strategic_artifact_generated", {
+                "artifact_type": "merchant_action_brief"
+            })
+            with st.spinner("Generating merchant action brief..."):
+                st.session_state["strategic_output"] = generate_ai_output(
+                    "merchant_action_brief",
+                    filtered_df,
+                    st.session_state.get("selected_case", None)
+                )
+
+    with ag2:
         if st.button("Generate Merchant Summary"):
             log_event("strategic_artifact_generated", {
                 "artifact_type": "merchant_summary"
@@ -1424,7 +1633,7 @@ with tab6:
                     st.session_state.get("selected_case", None)
                 )
 
-    with ag2:
+    with ag3:
         if st.button("Generate Policy Recommendation"):
             log_event("strategic_artifact_generated", {
                 "artifact_type": "policy_recommendation"

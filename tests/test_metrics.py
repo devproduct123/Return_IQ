@@ -32,14 +32,14 @@ def test_compute_summary_metrics():
     df = pd.DataFrame([
         {
             "risk_level": "High",
-            "risk_type_display": "Fraud",
+            "risk_type_display": "Fraud Risk",
             "order_value": 100.0,
-            "priority_tier": "Critical",
+            "priority_tier": "High",
             "case_status": "Open",
         },
         {
             "risk_level": "High",
-            "risk_type_display": "Return Abuse",
+            "risk_type_display": "Return Risk",
             "order_value": 200.0,
             "priority_tier": "High",
             "case_status": "Closed",
@@ -60,7 +60,7 @@ def test_compute_summary_metrics():
         "fraud_cases": 1,
         "return_cases": 1,
         "revenue_at_risk": 300.0,
-        "critical_cases": 1,
+        "high_cases": 2,
         "open_cases": 1,
         "closed_cases": 2,
         "protected_revenue": 200.0,

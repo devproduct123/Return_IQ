@@ -9,12 +9,11 @@ from src.metrics import format_currency
 # ── Badge helpers ───────────────────────────────────────────────────────────────
 
 _BADGE_CLASS = {
-    "Critical":     "badge-critical",
     "High":         "badge-high",
     "Moderate":     "badge-moderate",
     "Low":          "badge-low",
-    "Fraud":        "badge-fraud",
-    "Return Abuse": "badge-return",
+    "Fraud Risk":   "badge-fraud",
+    "Return Risk": "badge-return",
     "Open":         "badge-open",
     "Closed":       "badge-closed",
 }
@@ -35,7 +34,7 @@ def render_page_header():
     <span class="badge badge-neutral" style="font-size:0.62rem;padding:1px 6px;">DEMO</span>
   </div>
   <div style="font-size:0.8rem;color:#64748b;margin-top:2px;">
-    AI-powered fraud, return-abuse, and risk operations intelligence for e-commerce merchants
+    AI-powered fraud, return risk, and risk operations intelligence for e-commerce merchants
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -44,13 +43,75 @@ def render_page_header():
 def render_demo_banner():
     st.markdown("""
 <div class="riq-demo-banner">
-  <b>Demo:</b> This prototype uses simulated e-commerce transaction data to illustrate
-  fraud, return-abuse, and risk operations workflows.
+  <b>Demo environment:</b> This prototype uses synthetic order data only. No real
+  merchant, payment, or customer records are displayed.
 </div>
 """, unsafe_allow_html=True)
 
 
 # ── Summary components ──────────────────────────────────────────────────────────
+
+def render_merchant_context_bar(
+    merchant_name: str,
+    platform: str,
+    date_range: str,
+    orders_analyzed: int,
+    last_sync: str,
+):
+    items = [
+        ("Merchant", merchant_name),
+        ("Platform", platform),
+        ("Review Window", date_range),
+        ("Orders Analyzed", f"{orders_analyzed:,}"),
+        ("Last Sync", last_sync),
+    ]
+
+    cells = "".join(
+        f"""<div>
+  <div style="font-size:0.66rem;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#94a3b8;">{_html.escape(label)}</div>
+  <div style="font-size:0.86rem;font-weight:600;color:#334155;margin-top:2px;">{_html.escape(value)}</div>
+</div>"""
+        for label, value in items
+    )
+
+    st.markdown(
+        f'<div class="riq-context-bar">{cells}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_today_action_panel(actions: list[dict]):
+    cards = []
+    for action in actions:
+        label = _html.escape(str(action["label"]))
+        title = _html.escape(str(action["title"]))
+        body = _html.escape(str(action["body"]))
+        metric = _html.escape(str(action["metric"]))
+        accent = _html.escape(str(action.get("accent", "#4f46e5")))
+        cards.append(f"""<div class="riq-action-card" style="border-top-color:{accent};">
+  <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;">
+    <div style="font-size:0.66rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#94a3b8;">{label}</div>
+    <div class="badge badge-neutral">{metric}</div>
+  </div>
+  <div style="font-size:0.95rem;font-weight:700;color:#1e293b;margin-top:0.45rem;">{title}</div>
+  <div style="font-size:0.84rem;color:#475569;line-height:1.55;margin-top:0.25rem;">{body}</div>
+</div>""")
+
+    st.markdown(f"""
+<div class="riq-action-panel">
+  <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-end;margin-bottom:0.75rem;">
+    <div>
+      <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;
+        letter-spacing:0.07em;color:#94a3b8;">Merchant Priority Brief</div>
+      <div style="font-size:1rem;font-weight:700;color:#1e293b;">What should I do today?</div>
+    </div>
+    <div style="font-size:0.78rem;color:#64748b;">Generated from the current filters</div>
+  </div>
+  <div class="riq-action-grid">
+    {''.join(cards)}
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 def render_hero_summary(metrics: dict, top_category: str, top_state: str):
     st.markdown(f"""
@@ -60,8 +121,8 @@ def render_hero_summary(metrics: dict, top_category: str, top_state: str):
     <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged high risk, with
     <b>{format_currency(metrics["revenue_at_risk"])}</b> currently at risk and
     <b>{format_currency(metrics["protected_revenue"])}</b> already protected across closed flagged cases.
-    There are <b>{metrics["critical_cases"]:,}</b> critical-priority cases.
-    Return-abuse pressure is highest in <b>{_html.escape(str(top_category))}</b>, and fraud pressure is strongest in
+    There are <b>{metrics["high_cases"]:,}</b> high-priority cases.
+    Return risk pressure is highest in <b>{_html.escape(str(top_category))}</b>, and fraud pressure is strongest in
     <b>{_html.escape(str(top_state))}</b>.
   </div>
 </div>
@@ -101,6 +162,7 @@ def render_case_detail_box(selected_case: pd.Series):
     handling    = _html.escape(str(selected_case["automation_level"]))
     reason      = _html.escape(str(selected_case["risk_reason_summary"]))
     next_step   = _html.escape(str(selected_case["ai_agent_next_step"]))
+    decision    = _html.escape(str(selected_case["recommended_action"]))
 
     def _field(label: str, value: str) -> str:
         return (
@@ -121,6 +183,15 @@ def render_case_detail_box(selected_case: pd.Series):
     </div>
     <div style="display:flex;gap:0.35rem;">
       {_badge(priority)}{_badge(risk_type)}{_badge(case_status)}
+    </div>
+  </div>
+  <div style="background:#f8f9fb;border:1px solid #e2e8f0;border-left:3px solid #4f46e5;
+    border-radius:0 6px 6px 0;padding:0.6rem 0.8rem;margin-bottom:0.8rem;">
+    <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;
+      letter-spacing:0.06em;color:#94a3b8;margin-bottom:0.2rem;">Decision Recommendation</div>
+    <div style="font-size:0.9rem;font-weight:700;color:#1e293b;">{decision}</div>
+    <div style="font-size:0.82rem;color:#475569;margin-top:0.15rem;">
+      Use this as the merchant-facing action before approving, holding, verifying, or closing the order.
     </div>
   </div>
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.55rem 1.5rem;margin-bottom:0.8rem;">
@@ -203,10 +274,10 @@ def render_insight_footer(metrics: dict, top_category: str, top_state: str):
 
     insight_text = f"""
 - **{metrics["flagged_pct"]:.1f}%** of filtered orders are flagged high risk.
-- **{metrics["critical_cases"]:,}** cases are currently marked **Critical** and should be handled first.
+- **{metrics["high_cases"]:,}** cases are currently marked **High** priority and should be handled first.
 - **{metrics["open_cases"]:,}** cases are currently open, while **{metrics["closed_cases"]:,}** have already been resolved.
 - **{format_currency(metrics["protected_revenue"])}** in revenue has already been protected across closed flagged cases.
-- **{_html.escape(str(top_category))}** is the strongest return-abuse category.
+- **{_html.escape(str(top_category))}** is the strongest return risk category.
 - **{_html.escape(str(top_state))}** has the highest average fraud score.
 """
 
