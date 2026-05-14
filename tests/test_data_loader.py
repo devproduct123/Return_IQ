@@ -1,7 +1,20 @@
 import pandas as pd
 import pytest
 
-from src.data_loader import REQUIRED_COLUMNS, load_data
+from src.data_loader import (
+    REQUIRED_COLUMNS,
+    load_connector_data,
+    load_data,
+    normalize_shopify_orders,
+)
+
+
+class _FakeConnector:
+    def __init__(self, orders):
+        self.orders = orders
+
+    def fetch_orders(self, limit=100):
+        return self.orders[:limit]
 
 
 def _valid_row(**overrides):
@@ -83,3 +96,53 @@ def test_load_data_raises_for_missing_required_columns(tmp_path):
 
 def test_load_data_returns_none_for_missing_file(tmp_path):
     assert load_data(str(tmp_path / "missing.csv")) is None
+
+
+def test_normalize_shopify_orders_maps_to_required_schema():
+    df = normalize_shopify_orders([
+        {
+            "id": 123,
+            "name": "#1001",
+            "created_at": "2026-01-01T10:00:00Z",
+            "total_price": "129.50",
+            "customer": {"id": 456},
+            "line_items": [{"title": "Premium Hoodie", "product_type": "Apparel"}],
+            "shipping_address": {"country_code": "US", "province_code": "CA"},
+            "payment_gateway_names": ["shopify_payments"],
+            "refunds": [],
+            "cancelled_at": None,
+        }
+    ])
+
+    assert list(df.columns) == REQUIRED_COLUMNS
+    assert df.loc[0, "order_id"] == "#1001"
+    assert df.loc[0, "customer_id"] == "456"
+    assert df.loc[0, "product_category"] == "Apparel"
+    assert df.loc[0, "payment_method"] == "shopify_payments"
+    assert df.loc[0, "risk_type"] == "None"
+    assert df.loc[0, "recommended_action"] == "Allow"
+
+
+def test_load_connector_data_finalizes_shopify_payload():
+    connector = _FakeConnector([
+        {
+            "id": 123,
+            "created_at": "2026-01-01T10:00:00Z",
+            "total_price": "129.50",
+            "customer": {"id": 456},
+            "line_items": [{"title": "Premium Hoodie", "product_type": "Apparel"}],
+            "shipping_address": {"country_code": "US", "province_code": "CA"},
+            "payment_gateway_names": ["shopify_payments"],
+            "refunds": [{"id": 1}],
+        }
+    ])
+
+    df = load_connector_data(connector)
+
+    assert df.loc[0, "risk_type_display"] == "Return Risk"
+    assert pd.api.types.is_datetime64_any_dtype(df["order_date"])
+
+
+def test_load_data_requires_shopify_credentials():
+    with pytest.raises(ValueError, match="SHOPIFY_SHOP_DOMAIN"):
+        load_data(source="shopify")

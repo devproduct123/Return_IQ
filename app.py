@@ -417,8 +417,28 @@ GROQ_API_KEY = os.getenv(
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 @st.cache_data
-def load_data():
-    return load_transactions_data()
+def load_data(
+    source: str = "csv",
+    shop_domain: str | None = None,
+    access_token: str | None = None,
+    limit: int = 100,
+):
+    return load_transactions_data(
+        source=source,
+        shop_domain=shop_domain,
+        access_token=access_token,
+        limit=limit,
+    )
+
+
+def get_config_value(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value:
+        return value
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
 
 
 def get_session_id() -> str:
@@ -708,10 +728,43 @@ Task:
 
 # ── Data load ────────────────────────────────────────────────────────────────────
 
+st.sidebar.markdown("### Data Source")
+data_source_label = st.sidebar.selectbox(
+    "Choose where RiskIQ loads merchant data from",
+    ["Demo CSV", "Shopify API"],
+    index=0,
+)
+
+data_source = "shopify" if data_source_label == "Shopify API" else "csv"
+shop_domain = get_config_value("SHOPIFY_SHOP_DOMAIN")
+shop_token = get_config_value("SHOPIFY_ACCESS_TOKEN")
+shopify_limit = 100
+
+if data_source == "shopify":
+    st.sidebar.caption("Uses Shopify Admin API credentials from Streamlit secrets or environment variables.")
+    shopify_limit = st.sidebar.number_input(
+        "Shopify orders to sync",
+        min_value=10,
+        max_value=250,
+        value=100,
+        step=10,
+    )
+
 try:
-    df = load_data()
+    df = load_data(
+        source=data_source,
+        shop_domain=shop_domain,
+        access_token=shop_token,
+        limit=int(shopify_limit),
+    )
 except Exception as e:
     st.error(f"Failed to load dataset: {e}")
+    if data_source == "shopify":
+        st.info(
+            "To use Shopify API mode, add SHOPIFY_SHOP_DOMAIN and "
+            "SHOPIFY_ACCESS_TOKEN in Streamlit secrets. Switch back to Demo CSV "
+            "to use the local synthetic dataset."
+        )
     st.stop()
 
 render_page_header()
@@ -722,6 +775,14 @@ if df is None:
     st.error("data/transactions.csv not found.")
     st.code("python generate_data.py")
     st.stop()
+
+if st.session_state.get("_active_data_source") != data_source_label:
+    for _key in list(st.session_state.keys()):
+        if _key.startswith("filt_"):
+            del st.session_state[_key]
+    st.session_state["_active_data_source"] = data_source_label
+    st.session_state.pop("_active_scenario", None)
+    st.rerun()
 
 render_demo_banner()
 
@@ -878,10 +939,10 @@ top_state = safe_top_index(
 review_window = f"{start_date} to {end_date}"
 render_merchant_context_bar(
     DEMO_MERCHANT_NAME,
-    DEMO_PLATFORM,
+    "Shopify API" if data_source == "shopify" else DEMO_PLATFORM,
     review_window,
     len(filtered_df),
-    DEMO_LAST_SYNC,
+    "Live API sync" if data_source == "shopify" else DEMO_LAST_SYNC,
 )
 
 render_hero_summary(metrics, top_category, top_state)
