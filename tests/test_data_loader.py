@@ -6,6 +6,7 @@ from src.data_loader import (
     load_connector_data,
     load_data,
     normalize_shopify_orders,
+    save_synced_data,
 )
 
 
@@ -146,3 +147,16 @@ def test_load_connector_data_finalizes_shopify_payload():
 def test_load_data_requires_shopify_credentials():
     with pytest.raises(ValueError, match="SHOPIFY_SHOP_DOMAIN"):
         load_data(source="shopify")
+
+
+def test_save_synced_data_drops_display_column_and_writes_csv(tmp_path):
+    path = tmp_path / "shopify_transactions.csv"
+    df = pd.DataFrame([_valid_row()])
+    df["risk_type_display"] = "Return Risk"
+
+    saved_path = save_synced_data(df, str(path))
+    saved_df = pd.read_csv(saved_path)
+
+    assert saved_path == str(path)
+    assert "risk_type_display" not in saved_df.columns
+    assert saved_df.loc[0, "order_id"] == "O00001"

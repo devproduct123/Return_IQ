@@ -10,7 +10,11 @@ import streamlit.components.v1 as components
 from groq import Groq
 from dotenv import load_dotenv
 
-from src.data_loader import load_data as load_transactions_data
+from src.data_loader import (
+    SHOPIFY_CACHE_PATH,
+    load_data as load_transactions_data,
+    save_synced_data,
+)
 from src.metrics import (
     compute_summary_metrics,
     format_currency,
@@ -731,11 +735,15 @@ Task:
 st.sidebar.markdown("### Data Source")
 data_source_label = st.sidebar.selectbox(
     "Choose where RiskIQ loads merchant data from",
-    ["Demo CSV", "Shopify API"],
+    ["Demo CSV", "Shopify API", "Saved Shopify CSV"],
     index=0,
 )
 
-data_source = "shopify" if data_source_label == "Shopify API" else "csv"
+data_source = {
+    "Demo CSV": "csv",
+    "Shopify API": "shopify",
+    "Saved Shopify CSV": "saved_shopify",
+}[data_source_label]
 shop_domain = get_config_value("SHOPIFY_SHOP_DOMAIN")
 shop_token = get_config_value("SHOPIFY_ACCESS_TOKEN")
 shopify_limit = 100
@@ -749,6 +757,12 @@ if data_source == "shopify":
         value=100,
         step=10,
     )
+    if st.sidebar.button("Sync latest Shopify orders"):
+        load_data.clear()
+        st.session_state.pop("_active_data_source", None)
+        st.rerun()
+elif data_source == "saved_shopify":
+    st.sidebar.caption(f"Loads the last saved Shopify sync from {SHOPIFY_CACHE_PATH}.")
 
 try:
     df = load_data(
@@ -765,6 +779,11 @@ except Exception as e:
             "SHOPIFY_ACCESS_TOKEN in Streamlit secrets. Switch back to Demo CSV "
             "to use the local synthetic dataset."
         )
+    elif data_source == "saved_shopify":
+        st.info(
+            "No saved Shopify sync was found yet. Select Shopify API, sync orders, "
+            "then click Save Shopify Sync to CSV."
+        )
     st.stop()
 
 render_page_header()
@@ -772,14 +791,29 @@ render_page_header()
 log_once("session_started_logged", "session_start", {"app": "Aignita RiskIQ"})
 
 if df is None:
-    st.error("data/transactions.csv not found.")
-    st.code("python generate_data.py")
+    if data_source == "saved_shopify":
+        st.error(f"{SHOPIFY_CACHE_PATH} not found.")
+        st.info("Select Shopify API and save a sync before using Saved Shopify CSV.")
+    else:
+        st.error("data/transactions.csv not found.")
+        st.code("python generate_data.py")
     st.stop()
+
+if data_source == "shopify":
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Save Shopify Sync to CSV"):
+        saved_path = save_synced_data(df)
+        st.sidebar.success(f"Saved {len(df):,} rows to {saved_path}")
+        log_event("shopify_sync_saved", {
+            "rows": len(df),
+            "path": saved_path,
+        })
 
 if st.session_state.get("_active_data_source") != data_source_label:
     for _key in list(st.session_state.keys()):
         if _key.startswith("filt_"):
             del st.session_state[_key]
+    st.session_state.pop("filt_init", None)
     st.session_state["_active_data_source"] = data_source_label
     st.session_state.pop("_active_scenario", None)
     st.rerun()
@@ -804,6 +838,13 @@ if "filt_init" not in st.session_state:
         st.session_state[_k] = _v
     st.session_state["filt_init"] = True
     st.session_state["_active_scenario"] = "All Data"
+
+for _k, _valid_options in _filter_defaults.items():
+    _current_values = st.session_state.get(_k, _valid_options)
+    _current_values = _current_values if isinstance(_current_values, list) else list(_current_values)
+    _valid_set = set(_valid_options)
+    _clean_values = [value for value in _current_values if value in _valid_set]
+    st.session_state[_k] = _clean_values or _valid_options
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────────
 st.sidebar.markdown("### Demo Scenario")

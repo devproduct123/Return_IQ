@@ -1,9 +1,15 @@
 import json
+import ssl
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from src.integrations.base import CommerceConnector
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    certifi = None
 
 
 class ShopifyConnector(CommerceConnector):
@@ -18,6 +24,7 @@ class ShopifyConnector(CommerceConnector):
         params = urlencode({
             "limit": max(1, min(int(limit), 250)),
             "status": "any",
+            "order": "created_at desc",
             "fields": (
                 "id,name,created_at,total_price,currency,customer,line_items,"
                 "shipping_address,billing_address,payment_gateway_names,refunds,"
@@ -36,8 +43,12 @@ class ShopifyConnector(CommerceConnector):
             },
         )
 
-        with urlopen(request, timeout=20) as response:
+        ssl_context = (
+            ssl.create_default_context(cafile=certifi.where())
+            if certifi else None
+        )
+
+        with urlopen(request, timeout=20, context=ssl_context) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
         return payload.get("orders", [])
-

@@ -16,6 +16,7 @@ REQUIRED_COLUMNS = [
     "automation_level", "risk_reason_summary", "priority_tier", "case_status",
     "workflow_stage"
 ]
+SHOPIFY_CACHE_PATH = "data/shopify_transactions.csv"
 
 
 def _finalize_loaded_data(df: pd.DataFrame) -> pd.DataFrame:
@@ -44,6 +45,13 @@ def load_csv_data(path: str = "data/transactions.csv"):
 
     df = pd.read_csv(path)
     return _finalize_loaded_data(df)
+
+
+def save_synced_data(df: pd.DataFrame, path: str = SHOPIFY_CACHE_PATH) -> str:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    export_df = df.drop(columns=["risk_type_display"], errors="ignore")
+    export_df.to_csv(path, index=False)
+    return path
 
 
 def _first_line_item(order: dict[str, Any]) -> dict[str, Any]:
@@ -173,6 +181,9 @@ def load_data(
 ):
     if source == "csv":
         return load_csv_data(path)
+
+    if source == "saved_shopify":
+        return load_csv_data(SHOPIFY_CACHE_PATH)
 
     if source == "shopify":
         if not shop_domain or not access_token:

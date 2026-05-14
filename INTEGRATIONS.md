@@ -8,8 +8,18 @@ The Streamlit sidebar has a **Data Source** selector:
 
 - `Demo CSV`: loads `data/transactions.csv`.
 - `Shopify API`: fetches recent Shopify orders and normalizes them into the RiskIQ schema.
+- `Saved Shopify CSV`: loads the last saved Shopify sync from `data/shopify_transactions.csv`.
 
 `Demo CSV` remains the default so the app is safe for demos and local development.
+
+When using `Shopify API`, the sidebar includes **Save Shopify Sync to CSV**. This writes
+the normalized dataframe to:
+
+```text
+data/shopify_transactions.csv
+```
+
+That file is intentionally git-ignored because it can contain merchant/order data.
 
 ## Shopify API Setup
 
@@ -46,6 +56,7 @@ src/data_loader.py
   normalize_shopify_orders()
   load_connector_data()
   load_shopify_data()
+  save_synced_data()
   load_data()
 ```
 
@@ -61,4 +72,3 @@ Good next connectors:
 - Recharge for subscription signals.
 
 Production connectors should add OAuth, tenant isolation, background sync jobs, retry/backoff, rate-limit handling, encrypted secrets, audit logging, and disconnect/delete flows.
-
