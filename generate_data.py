@@ -204,6 +204,39 @@ def assign_case_status_and_stage(risk_level: str, recommended_action: str):
     return case_status, workflow_stage
 
 
+def derive_latest_action_taken(
+    recommended_action: str,
+    case_status: str,
+    workflow_stage: str,
+) -> str:
+    if case_status == "Closed" or workflow_stage == "Resolved":
+        if recommended_action == "Allow":
+            return "Order approved"
+        return "Case resolved"
+
+    if workflow_stage == "Case Created":
+        return "Case created"
+    if workflow_stage == "Review Queue":
+        return "Soft review queued"
+    if workflow_stage == "Verification Sent":
+        return "Customer verification sent"
+    if workflow_stage == "Awaiting Customer Response":
+        return "Awaiting customer response"
+    if workflow_stage == "Awaiting Item Inspection":
+        return "Awaiting item inspection"
+    if workflow_stage == "High Returner Tagged":
+        return "High returner tagged"
+
+    if recommended_action == "Hold Fulfillment":
+        return "Fulfillment held"
+    if recommended_action == "Restrict Return / Refund":
+        return "Return/refund restricted"
+    if recommended_action == "Soft Review":
+        return "Soft review started"
+
+    return "No action yet"
+
+
 for i in range(n):
     order_id = f"O{i+1:05d}"
     customer_id = f"C{np.random.randint(1000, 3000)}"
@@ -304,6 +337,11 @@ for i in range(n):
         risk_level=risk_level,
         recommended_action=action_info["recommended_action"],
     )
+    latest_action_taken = derive_latest_action_taken(
+        action_info["recommended_action"],
+        case_status,
+        workflow_stage,
+    )
 
     data.append(
         {
@@ -334,6 +372,7 @@ for i in range(n):
             "priority_tier": priority_tier,
             "case_status": case_status,
             "workflow_stage": workflow_stage,
+            "latest_action_taken": latest_action_taken,
         }
     )
 

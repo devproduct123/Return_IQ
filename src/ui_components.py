@@ -30,7 +30,7 @@ def render_page_header():
     st.markdown("""
 <div class="riq-page-header">
   <div style="display:flex;align-items:baseline;gap:0.5rem;">
-    <span style="font-size:1.3rem;font-weight:700;color:#1e293b;letter-spacing:-0.02em;">Aignita RiskIQ</span>
+    <span style="font-size:1.3rem;font-weight:700;color:#1d4ed8;letter-spacing:-0.02em;">Aignita RiskIQ</span>
     <span class="badge badge-neutral" style="font-size:0.62rem;padding:1px 6px;">DEMO</span>
   </div>
   <div style="font-size:0.8rem;color:#64748b;margin-top:2px;">
@@ -87,7 +87,7 @@ def render_today_action_panel(actions: list[dict]):
         title = _html.escape(str(action["title"]))
         body = _html.escape(str(action["body"]))
         metric = _html.escape(str(action["metric"]))
-        accent = _html.escape(str(action.get("accent", "#4f46e5")))
+        accent = _html.escape(str(action.get("accent", "#2563eb")))
         cards.append(f"""<div class="riq-action-card" style="border-top-color:{accent};">
   <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;">
     <div style="font-size:0.66rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:#94a3b8;">{label}</div>
@@ -160,6 +160,7 @@ def render_case_detail_box(selected_case: pd.Series):
     action      = _html.escape(str(selected_case["recommended_action"]))
     owner       = _html.escape(str(selected_case["action_owner"]))
     handling    = _html.escape(str(selected_case["automation_level"]))
+    latest_action = _html.escape(str(selected_case.get("latest_action_taken", "No action yet")))
     reason      = _html.escape(str(selected_case["risk_reason_summary"]))
     next_step   = _html.escape(str(selected_case["ai_agent_next_step"]))
     decision    = _html.escape(str(selected_case["recommended_action"]))
@@ -185,7 +186,7 @@ def render_case_detail_box(selected_case: pd.Series):
       {_badge(priority)}{_badge(risk_type)}{_badge(case_status)}
     </div>
   </div>
-  <div style="background:#f8f9fb;border:1px solid #e2e8f0;border-left:3px solid #4f46e5;
+  <div style="background:#f8f9fb;border:1px solid #e2e8f0;border-left:3px solid #2563eb;
     border-radius:0 6px 6px 0;padding:0.6rem 0.8rem;margin-bottom:0.8rem;">
     <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;
       letter-spacing:0.06em;color:#94a3b8;margin-bottom:0.2rem;">Decision Recommendation</div>
@@ -201,6 +202,7 @@ def render_case_detail_box(selected_case: pd.Series):
     {_field("Location", location)}
     {_field("Payment", payment)}
     {_field("Workflow Stage", workflow)}
+    {_field("Latest Action", latest_action)}
     {_field("Recommended Action", action)}
     {_field("Action Owner", owner)}
     {_field("Handling Mode", handling)}

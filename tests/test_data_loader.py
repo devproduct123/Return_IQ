@@ -3,6 +3,7 @@ import pytest
 
 from src.data_loader import (
     REQUIRED_COLUMNS,
+    derive_latest_action_taken,
     load_connector_data,
     load_data,
     normalize_shopify_orders,
@@ -47,6 +48,7 @@ def _valid_row(**overrides):
         "priority_tier": "High",
         "case_status": "Open",
         "workflow_stage": "Review Queue",
+        "latest_action_taken": "Soft review queued",
     }
     row.update(overrides)
     return row
@@ -70,6 +72,27 @@ def test_load_data_maps_missing_risk_type_to_none_display(tmp_path):
     df = load_data(str(path))
 
     assert df.loc[0, "risk_type_display"] == "None"
+
+
+def test_load_data_derives_latest_action_when_missing(tmp_path):
+    path = tmp_path / "transactions.csv"
+    row = _valid_row()
+    row.pop("latest_action_taken")
+    pd.DataFrame([row]).to_csv(path, index=False)
+
+    df = load_data(str(path))
+
+    assert df.loc[0, "latest_action_taken"] == "Soft review queued"
+
+
+def test_derive_latest_action_taken_for_common_workflow_states():
+    assert derive_latest_action_taken("Allow", "Closed", "Resolved") == "Order approved"
+    assert derive_latest_action_taken(
+        "Hold Fulfillment", "Open", "Verification Sent"
+    ) == "Customer verification sent"
+    assert derive_latest_action_taken(
+        "Restrict Return / Refund", "Pending", "Awaiting Item Inspection"
+    ) == "Awaiting item inspection"
 
 
 
@@ -122,6 +145,7 @@ def test_normalize_shopify_orders_maps_to_required_schema():
     assert df.loc[0, "payment_method"] == "shopify_payments"
     assert df.loc[0, "risk_type"] == "None"
     assert df.loc[0, "recommended_action"] == "Allow"
+    assert df.loc[0, "latest_action_taken"] == "Order approved"
 
 
 def test_load_connector_data_finalizes_shopify_payload():

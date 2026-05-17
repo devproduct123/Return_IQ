@@ -14,12 +14,55 @@ REQUIRED_COLUMNS = [
     "fraud_score", "return_risk_score", "unified_risk_score", "risk_level",
     "risk_type", "recommended_action", "ai_agent_next_step", "action_owner",
     "automation_level", "risk_reason_summary", "priority_tier", "case_status",
-    "workflow_stage"
+    "workflow_stage", "latest_action_taken"
 ]
 SHOPIFY_CACHE_PATH = "data/shopify_transactions.csv"
 
 
+def derive_latest_action_taken(
+    recommended_action: str,
+    case_status: str,
+    workflow_stage: str,
+) -> str:
+    if case_status == "Closed" or workflow_stage == "Resolved":
+        if recommended_action == "Allow":
+            return "Order approved"
+        return "Case resolved"
+
+    if workflow_stage == "Case Created":
+        return "Case created"
+    if workflow_stage == "Review Queue":
+        return "Soft review queued"
+    if workflow_stage == "Verification Sent":
+        return "Customer verification sent"
+    if workflow_stage == "Awaiting Customer Response":
+        return "Awaiting customer response"
+    if workflow_stage == "Awaiting Item Inspection":
+        return "Awaiting item inspection"
+    if workflow_stage == "High Returner Tagged":
+        return "High returner tagged"
+
+    if recommended_action == "Hold Fulfillment":
+        return "Fulfillment held"
+    if recommended_action == "Restrict Return / Refund":
+        return "Return/refund restricted"
+    if recommended_action == "Soft Review":
+        return "Soft review started"
+
+    return "No action yet"
+
+
 def _finalize_loaded_data(df: pd.DataFrame) -> pd.DataFrame:
+    if "latest_action_taken" not in df.columns:
+        df["latest_action_taken"] = df.apply(
+            lambda row: derive_latest_action_taken(
+                str(row.get("recommended_action", "")),
+                str(row.get("case_status", "")),
+                str(row.get("workflow_stage", "")),
+            ),
+            axis=1,
+        )
+
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns in dataset: {missing}")
@@ -147,6 +190,11 @@ def normalize_shopify_orders(raw_orders: list[dict[str, Any]]) -> pd.DataFrame:
             "priority_tier": priority_tier,
             "case_status": case_status,
             "workflow_stage": workflow_stage,
+            "latest_action_taken": derive_latest_action_taken(
+                recommended_action,
+                case_status,
+                workflow_stage,
+            ),
         })
 
     return pd.DataFrame(rows, columns=REQUIRED_COLUMNS)

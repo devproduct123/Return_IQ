@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from src.data_loader import (
     SHOPIFY_CACHE_PATH,
+    derive_latest_action_taken,
     load_data as load_transactions_data,
     save_synced_data,
 )
@@ -49,6 +50,10 @@ st.markdown("""
 <style>
 /* === Aignita RiskIQ Design System === */
 
+.stApp {
+    background: #f8fafc;
+}
+
 .block-container {
     padding-top: 1.25rem;
     padding-bottom: 2rem;
@@ -58,7 +63,7 @@ st.markdown("""
 /* Metric cards */
 [data-testid="stMetric"] {
     background: #ffffff;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #dbeafe;
     border-radius: 8px;
     padding: 0.75rem 1rem !important;
 }
@@ -78,7 +83,7 @@ st.markdown("""
 
 /* Tabs */
 .stTabs [data-baseweb="tab-list"] {
-    background: #f1f5f9;
+    background: #eaf3ff;
     border-radius: 8px;
     padding: 3px;
     gap: 2px;
@@ -93,8 +98,8 @@ st.markdown("""
 }
 .stTabs [aria-selected="true"] {
     background: #ffffff !important;
-    color: #1e293b !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+    color: #1d4ed8 !important;
+    box-shadow: 0 1px 3px rgba(37,99,235,0.14);
 }
 .stTabs [data-baseweb="tab-highlight"] {
     display: none;
@@ -102,8 +107,43 @@ st.markdown("""
 
 /* Sidebar */
 [data-testid="stSidebar"] {
-    background: #ffffff;
-    border-right: 1px solid #e2e8f0;
+    background: #f7fbff;
+    border-right: 1px solid #bfdbfe;
+}
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] label {
+    color: #1e3a8a !important;
+}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] {
+    color: #475569 !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div,
+[data-testid="stSidebar"] [data-baseweb="input"] > div {
+    border-color: #bfdbfe !important;
+    background: #ffffff !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div:hover,
+[data-testid="stSidebar"] [data-baseweb="input"] > div:hover {
+    border-color: #60a5fa !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] {
+    background: #dbeafe !important;
+    color: #1d4ed8 !important;
+    border: 1px solid #bfdbfe !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] span {
+    color: #1d4ed8 !important;
+}
+[data-testid="stSidebar"] [role="option"][aria-selected="true"] {
+    background: #dbeafe !important;
+    color: #1d4ed8 !important;
+}
+[data-testid="stSidebar"] [data-baseweb="calendar"] button[aria-selected="true"],
+[data-testid="stSidebar"] [data-baseweb="calendar"] button:hover {
+    background: #2563eb !important;
+    color: #ffffff !important;
 }
 
 /* Buttons */
@@ -118,36 +158,36 @@ st.markdown("""
     transition: border-color 0.1s ease, background 0.1s ease;
 }
 .stButton > button:hover {
-    background: #f8f9fb !important;
-    border-color: #94a3b8 !important;
-    color: #1e293b !important;
+    background: #eff6ff !important;
+    border-color: #60a5fa !important;
+    color: #1d4ed8 !important;
 }
 
 /* Download buttons */
 [data-testid="stDownloadButton"] > button {
-    background: #1e293b !important;
+    background: #2563eb !important;
     color: #ffffff !important;
-    border: 1px solid #1e293b !important;
+    border: 1px solid #2563eb !important;
     border-radius: 6px;
     font-size: 0.82rem;
     font-weight: 500;
 }
 [data-testid="stDownloadButton"] > button:hover {
-    background: #334155 !important;
-    border-color: #334155 !important;
+    background: #1d4ed8 !important;
+    border-color: #1d4ed8 !important;
 }
 
 /* Page header */
 .riq-page-header {
     padding: 0.75rem 0 0.75rem 0;
     margin-bottom: 0.75rem;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid #bfdbfe;
 }
 
 /* Hero summary card */
 .riq-hero {
     background: #ffffff;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #dbeafe;
     border-radius: 8px;
     padding: 1rem 1.25rem;
     margin-bottom: 1rem;
@@ -156,7 +196,7 @@ st.markdown("""
 /* Case detail card */
 .riq-detail {
     background: #ffffff;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #dbeafe;
     border-radius: 8px;
     padding: 1rem 1.25rem;
     margin-top: 0.75rem;
@@ -167,7 +207,7 @@ st.markdown("""
 .riq-note {
     background: #f8f9fb;
     border: 1px solid #e2e8f0;
-    border-left: 3px solid #4f46e5;
+    border-left: 3px solid #2563eb;
     border-radius: 0 6px 6px 0;
     padding: 0.6rem 0.9rem;
     margin-bottom: 0.75rem;
@@ -192,14 +232,14 @@ st.markdown("""
     grid-template-columns: 1.2fr 0.9fr 1.4fr 1fr 1fr;
     gap: 0.9rem;
     background: #ffffff;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #dbeafe;
     border-radius: 8px;
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
 }
 .riq-action-panel {
     background: #ffffff;
-    border: 1px solid #e2e8f0;
+    border: 1px solid #dbeafe;
     border-radius: 8px;
     padding: 1rem 1.25rem;
     margin: 1rem 0;
@@ -212,7 +252,7 @@ st.markdown("""
 .riq-action-card {
     background: #ffffff;
     border: 1px solid #e2e8f0;
-    border-top: 3px solid #4f46e5;
+    border-top: 3px solid #2563eb;
     border-radius: 7px;
     padding: 0.85rem;
     min-height: 8rem;
@@ -263,7 +303,7 @@ st.markdown("""
 .badge-high     { background:#fff7ed; color:#ea580c; border:1px solid #fed7aa; }
 .badge-moderate { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
 .badge-low      { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
-.badge-fraud    { background:#eef2ff; color:#4f46e5; border:1px solid #c7d2fe; }
+.badge-fraud    { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; }
 .badge-return   { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
 .badge-open     { background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; }
 .badge-closed   { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
@@ -273,9 +313,9 @@ st.markdown("""
 
 # ── Chart styling ───────────────────────────────────────────────────────────────
 
-CHART_COLORS = ["#4f46e5", "#d97706", "#16a34a", "#dc2626", "#0284c7", "#7c3aed", "#64748b"]
+CHART_COLORS = ["#2563eb", "#0ea5e9", "#16a34a", "#dc2626", "#d97706", "#7c3aed", "#64748b"]
 PRIORITY_COLORS = {"High": "#dc2626", "Moderate": "#d97706", "Low": "#16a34a"}
-RISK_TYPE_COLORS = {"Fraud Risk": "#4f46e5", "Return Risk": "#d97706"}
+RISK_TYPE_COLORS = {"Fraud Risk": "#2563eb", "Return Risk": "#d97706"}
 DEMO_MERCHANT_NAME = "Demo Store"
 DEMO_PLATFORM = "Shopify"
 DEMO_LAST_SYNC = "Today, 9:42 AM"
@@ -398,7 +438,7 @@ def build_today_actions(
                 "driving the largest outstanding exposure."
             ),
             "metric": format_currency(open_revenue),
-            "accent": "#4f46e5",
+            "accent": "#2563eb",
         },
         {
             "label": "Policy Signal",
@@ -433,6 +473,34 @@ def load_data(
         access_token=access_token,
         limit=limit,
     )
+
+
+def ensure_latest_action_taken(data: pd.DataFrame) -> pd.DataFrame:
+    """Keep cached or older loaded datasets compatible with the current UI."""
+    data = data.copy()
+    if "latest_action_taken" not in data.columns:
+        data["latest_action_taken"] = data.apply(
+            lambda row: derive_latest_action_taken(
+                str(row.get("recommended_action", "")),
+                str(row.get("case_status", "")),
+                str(row.get("workflow_stage", "")),
+            ),
+            axis=1,
+        )
+    else:
+        missing_action = data["latest_action_taken"].isna() | (
+            data["latest_action_taken"].astype(str).str.strip() == ""
+        )
+        if missing_action.any():
+            data.loc[missing_action, "latest_action_taken"] = data.loc[missing_action].apply(
+                lambda row: derive_latest_action_taken(
+                    str(row.get("recommended_action", "")),
+                    str(row.get("case_status", "")),
+                    str(row.get("workflow_stage", "")),
+                ),
+                axis=1,
+            )
+    return data
 
 
 def get_config_value(name: str, default: str | None = None) -> str | None:
@@ -562,6 +630,7 @@ Risk Type: {case_row["risk_type_display"]}
 Priority Tier: {case_row["priority_tier"]}
 Case Status: {case_row["case_status"]}
 Workflow Stage: {case_row["workflow_stage"]}
+Latest Action Taken: {case_row.get("latest_action_taken", "No action yet")}
 
 Order Value: ${case_row["order_value"]}
 
@@ -799,6 +868,8 @@ if df is None:
         st.code("python generate_data.py")
     st.stop()
 
+df = ensure_latest_action_taken(df)
+
 if data_source == "shopify":
     st.sidebar.markdown("---")
     if st.sidebar.button("Save Shopify Sync to CSV"):
@@ -1034,7 +1105,7 @@ with tab_ov:
                 trend_df, x="order_day", y="flagged_rate",
                 title="Flagged Order Rate Over Time (%)",
                 labels={"order_day": "Order Date", "flagged_rate": "Flagged Rate (%)"},
-                color_discrete_sequence=["#4f46e5"],
+                color_discrete_sequence=["#2563eb"],
             )),
             use_container_width=True
         )
@@ -1158,7 +1229,7 @@ with tab_fr:
                 fraud_by_state, x="state", y="fraud_score",
                 title="Average Fraud Score by State",
                 labels={"state": "State", "fraud_score": "Average Fraud Score"},
-                color_discrete_sequence=["#4f46e5"],
+                color_discrete_sequence=["#2563eb"],
             )),
             use_container_width=True
         )
@@ -1167,7 +1238,7 @@ with tab_fr:
                 fraud_by_payment, x="payment_method", y="fraud_score",
                 title="Average Fraud Score by Payment Method",
                 labels={"payment_method": "Payment Method", "fraud_score": "Average Fraud Score"},
-                color_discrete_sequence=["#4f46e5"],
+                color_discrete_sequence=["#2563eb"],
             ), x_tickangle=-15),
             use_container_width=True
         )
@@ -1176,7 +1247,7 @@ with tab_fr:
             [
                 "order_id", "customer_id", "order_date", "state", "payment_method",
                 "order_value", "fraud_score", "priority_tier", "case_status",
-                "workflow_stage", "risk_reason_summary", "recommended_action",
+                "workflow_stage", "latest_action_taken", "risk_reason_summary", "recommended_action",
                 "ai_agent_next_step"
             ]
         ].sort_values(["fraud_score", "order_value"], ascending=[False, False]).head(50)
@@ -1257,7 +1328,7 @@ with tab_rt:
             [
                 "order_id", "customer_id", "order_date", "product_category", "product_name",
                 "past_returns", "order_value", "return_risk_score", "priority_tier",
-                "case_status", "workflow_stage", "risk_reason_summary",
+                "case_status", "workflow_stage", "latest_action_taken", "risk_reason_summary",
                 "recommended_action", "ai_agent_next_step"
             ]
         ].sort_values(["return_risk_score", "order_value"], ascending=[False, False]).head(50)
@@ -1364,7 +1435,7 @@ with tab_ac:
     action_queue = filtered_df[
         [
             "order_id", "customer_id", "risk_type_display", "priority_tier", "case_status",
-            "workflow_stage", "recommended_action", "ai_agent_next_step", "action_owner",
+            "workflow_stage", "latest_action_taken", "recommended_action", "ai_agent_next_step", "action_owner",
             "automation_level", "risk_reason_summary", "order_value", "unified_risk_score"
         ]
     ].rename(columns={"risk_type_display": "risk_type"}).sort_values(
@@ -1386,7 +1457,7 @@ with tab_ac:
         resolved_view = closed_flagged_cases[
             [
                 "order_id", "customer_id", "order_date", "risk_type_display", "priority_tier",
-                "recommended_action", "workflow_stage", "order_value",
+                "recommended_action", "workflow_stage", "latest_action_taken", "order_value",
                 "unified_risk_score", "risk_reason_summary", "action_owner"
             ]
         ].rename(columns={"risk_type_display": "risk_type"}).sort_values(
@@ -1408,14 +1479,30 @@ with tab_rq:
     st.subheader("Review Queue")
 
     flagged_df = sort_cases_by_priority(get_open_high_risk_cases(filtered_df))
+    closed_flagged_cases = filtered_df[
+        (filtered_df["risk_level"] == "High") & (
+            filtered_df["case_status"] == "Closed")
+    ].copy()
+    all_flagged_cases = sort_cases_by_priority(
+        filtered_df[filtered_df["risk_level"] == "High"].copy()
+    )
+    protected_revenue = float(closed_flagged_cases["order_value"].sum())
+    closure_rate = (
+        round(len(closed_flagged_cases) /
+              (len(flagged_df) + len(closed_flagged_cases)) * 100, 1)
+        if (len(flagged_df) + len(closed_flagged_cases)) > 0 else 0.0
+    )
 
-    oq1, oq2 = st.columns(2)
+    oq1, oq2, oq3, oq4, oq5 = st.columns(5)
     oq1.metric("Open High-Risk Cases", f"{len(flagged_df):,}")
     oq2.metric(
         "Open Revenue at Risk",
         format_currency(
             float(flagged_df["order_value"].sum()) if not flagged_df.empty else 0.0)
     )
+    oq3.metric("Closed Flagged Cases", f"{len(closed_flagged_cases):,}")
+    oq4.metric("Protected Revenue", format_currency(protected_revenue))
+    oq5.metric("Closure Rate", f"{closure_rate:.1f}%")
 
     qc1, qc2 = st.columns(2)
     download_open_cases = qc1.download_button(
@@ -1430,15 +1517,15 @@ with tab_rq:
         log_event("download_clicked", {"file": "aignita_open_cases.csv"})
 
     download_filtered_dataset = qc2.download_button(
-        label="Download Filtered Dataset CSV",
-        data=to_csv_download(filtered_df.drop(
-            columns=["risk_type_display"], errors="ignore")),
-        file_name="aignita_filtered_dataset.csv",
+        label="Download All Cases CSV",
+        data=to_csv_download(all_flagged_cases.drop(
+            columns=["priority_sort", "risk_type_display"], errors="ignore")),
+        file_name="aignita_flagged_cases.csv",
         mime="text/csv",
         key="download_filtered_dataset"
     )
     if download_filtered_dataset:
-        log_event("download_clicked", {"file": "aignita_filtered_dataset.csv"})
+        log_event("download_clicked", {"file": "aignita_flagged_cases.csv"})
 
     if flagged_df.empty:
         st.warning("No open cases in the current filter selection.")
@@ -1447,7 +1534,7 @@ with tab_rq:
         top_review_cases = flagged_df[
             [
                 "order_id", "customer_id", "risk_type_display", "priority_tier",
-                "recommended_action", "order_value", "unified_risk_score",
+                "recommended_action", "latest_action_taken", "order_value", "unified_risk_score",
                 "risk_reason_summary"
             ]
         ].rename(columns={"risk_type_display": "risk_type"}).head(5)
@@ -1467,7 +1554,7 @@ with tab_rq:
                 "country", "state", "payment_method", "order_value",
                 "fraud_score", "return_risk_score", "unified_risk_score",
                 "risk_type_display", "priority_tier", "case_status", "workflow_stage",
-                "risk_reason_summary", "recommended_action", "ai_agent_next_step",
+                "latest_action_taken", "risk_reason_summary", "recommended_action", "ai_agent_next_step",
                 "action_owner", "automation_level"
             ]
         ].rename(columns={"risk_type_display": "risk_type"}).head(100)
