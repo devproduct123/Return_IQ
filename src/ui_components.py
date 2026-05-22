@@ -43,7 +43,7 @@ def render_page_header():
 def render_demo_banner():
     st.markdown("""
 <div class="riq-demo-banner">
-  <b>Interested in a pilot?</b> Reach out at <b>dg@aignita.com</b>.
+  <b>Want to explore RiskIQ for your store?</b> Contact <b>dg@aignita.com</b> to discuss a pilot.
 </div>
 """, unsafe_allow_html=True)
 
