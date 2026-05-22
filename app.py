@@ -38,10 +38,10 @@ from src.ui_components import (
     render_hero_summary,
     render_insight_footer,
     render_merchant_context_bar,
-    render_outcome_summary,
     render_page_header,
     render_today_action_panel,
     render_timeline_html,
+    render_verification_templates,
 )
 
 st.set_page_config(page_title="Aignita RiskIQ", layout="wide")
@@ -246,16 +246,16 @@ st.markdown("""
 }
 .riq-action-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.8rem;
+    grid-template-columns: repeat(2, minmax(18rem, 1fr));
+    gap: 1rem;
 }
 .riq-action-card {
     background: #ffffff;
     border: 1px solid #e2e8f0;
     border-top: 3px solid #2563eb;
     border-radius: 7px;
-    padding: 0.85rem;
-    min-height: 8rem;
+    padding: 1rem 1.1rem;
+    min-height: 7.25rem;
 }
 @media (max-width: 900px) {
     .riq-context-bar,
@@ -415,9 +415,6 @@ def build_today_actions(
 ) -> list[dict]:
     open_high_risk = get_open_high_risk_cases(data)
     open_revenue = float(open_high_risk["order_value"].sum()) if not open_high_risk.empty else 0.0
-    verification_count = int(
-        (data["recommended_action"].str.contains("verify", case=False, na=False)).sum()
-    )
 
     return [
         {
@@ -439,16 +436,6 @@ def build_today_actions(
             ),
             "metric": format_currency(open_revenue),
             "accent": "#2563eb",
-        },
-        {
-            "label": "Policy Signal",
-            "title": f"Tighten review around {top_category}",
-            "body": (
-                f"Return-abuse pressure is highest in {top_category}, while fraud pressure "
-                f"is strongest in {top_state}. Use those signals for policy and ops tuning."
-            ),
-            "metric": f"{verification_count:,} verify",
-            "accent": "#d97706",
         },
     ]
 
@@ -501,6 +488,154 @@ def ensure_latest_action_taken(data: pd.DataFrame) -> pd.DataFrame:
                 axis=1,
             )
     return data
+
+
+OPS_ACTIONS = {
+    "Start Review": {
+        "case_status": "Open",
+        "workflow_stage": "Review Queue",
+        "latest_action_taken": "Review started by operations",
+        "outcome_type": "Pending",
+    },
+    "Send Verification": {
+        "case_status": "Open",
+        "workflow_stage": "Verification Sent",
+        "latest_action_taken": "Customer verification sent",
+        "outcome_type": "Pending",
+    },
+    "Await Customer Response": {
+        "case_status": "Open",
+        "workflow_stage": "Awaiting Customer Response",
+        "latest_action_taken": "Awaiting customer response",
+        "outcome_type": "Pending",
+    },
+    "Hold Fulfillment": {
+        "case_status": "Open",
+        "workflow_stage": "Review Queue",
+        "latest_action_taken": "Fulfillment held by operations",
+        "outcome_type": "Pending",
+    },
+    "Approve Order": {
+        "case_status": "Closed",
+        "workflow_stage": "Resolved",
+        "latest_action_taken": "Order approved by operations",
+        "outcome_type": "Approved",
+    },
+    "Restrict Return / Refund": {
+        "case_status": "Closed",
+        "workflow_stage": "Resolved",
+        "latest_action_taken": "Return/refund restricted by operations",
+        "outcome_type": "Return Restricted",
+    },
+    "Escalate to Senior Review": {
+        "case_status": "Open",
+        "workflow_stage": "Escalated to Senior Review",
+        "latest_action_taken": "Escalated for senior review",
+        "outcome_type": "Pending",
+    },
+    "Close Case": {
+        "case_status": "Closed",
+        "workflow_stage": "Resolved",
+        "latest_action_taken": "Case closed by operations",
+        "outcome_type": "Resolved",
+    },
+}
+
+
+def ensure_ops_action_tracking(data: pd.DataFrame) -> pd.DataFrame:
+    """Add action audit columns used by the Review Queue action form."""
+    data = data.copy()
+    defaults = {
+        "ops_action_taken": "",
+        "ops_action_by": "",
+        "ops_action_at": "",
+        "ops_action_note": "",
+        "ops_action_history": "",
+    }
+    for column, default in defaults.items():
+        if column not in data.columns:
+            data[column] = default
+        else:
+            data[column] = data[column].fillna(default)
+    return data
+
+
+def apply_ops_action(
+    data: pd.DataFrame,
+    order_id: str,
+    action: str,
+    actor: str,
+    note: str,
+) -> pd.DataFrame:
+    updated = ensure_ops_action_tracking(data)
+    if action not in OPS_ACTIONS:
+        raise ValueError(f"Unsupported ops action: {action}")
+
+    action_mask = updated["order_id"].astype(str) == str(order_id)
+    if not action_mask.any():
+        raise ValueError(f"Order ID not found: {order_id}")
+
+    action_at = datetime.now(timezone.utc).isoformat()
+    history_event = {
+        "ts": action_at,
+        "action": action,
+        "actor": actor.strip() or "Operations Team",
+        "note": note.strip(),
+        "case_status": OPS_ACTIONS[action]["case_status"],
+        "workflow_stage": OPS_ACTIONS[action]["workflow_stage"],
+        "latest_action_taken": OPS_ACTIONS[action]["latest_action_taken"],
+    }
+
+    existing_history = str(
+        updated.loc[action_mask, "ops_action_history"].iloc[0] or ""
+    ).strip()
+    try:
+        action_history = json.loads(existing_history) if existing_history else []
+        if not isinstance(action_history, list):
+            action_history = []
+    except json.JSONDecodeError:
+        action_history = []
+    action_history.append(history_event)
+
+    for column, value in OPS_ACTIONS[action].items():
+        updated.loc[action_mask, column] = value
+
+    updated.loc[action_mask, "ops_action_taken"] = action
+    updated.loc[action_mask, "ops_action_by"] = actor.strip() or "Operations Team"
+    updated.loc[action_mask, "ops_action_at"] = action_at
+    updated.loc[action_mask, "ops_action_note"] = note.strip()
+    updated.loc[action_mask, "ops_action_history"] = json.dumps(action_history)
+    return updated
+
+
+def add_ops_action_session_event(case_row: pd.Series, action: str, actor: str, note: str):
+    event = {
+        "ts": str(case_row.get("ops_action_at", datetime.now(timezone.utc).isoformat())),
+        "order_id": str(case_row.get("order_id", "")),
+        "customer_id": str(case_row.get("customer_id", "")),
+        "action": action,
+        "actor": actor.strip() or "Operations Team",
+        "note": note.strip(),
+        "case_status": str(case_row.get("case_status", "")),
+        "workflow_stage": str(case_row.get("workflow_stage", "")),
+        "latest_action_taken": str(case_row.get("latest_action_taken", "")),
+    }
+    st.session_state.setdefault("ops_action_log", []).insert(0, event)
+
+
+def get_action_persistence_path(source: str) -> str:
+    if source == "saved_shopify":
+        return SHOPIFY_CACHE_PATH
+    if source == "shopify":
+        return SHOPIFY_CACHE_PATH
+    return "data/transactions.csv"
+
+
+def persist_action_updates(data: pd.DataFrame, source: str) -> str:
+    path = get_action_persistence_path(source)
+    saved_path = save_synced_data(data, path=path)
+    load_data.clear()
+    return saved_path
 
 
 def get_config_value(name: str, default: str | None = None) -> str | None:
@@ -620,11 +755,20 @@ def build_case_context(case_row: pd.Series | None) -> str:
     if case_row is None:
         return "No selected case context."
 
+    device_risk = case_row.get("device_risk", "Unknown")
+    velocity = case_row.get("velocity_flag", 0)
+    lifetime = case_row.get("customer_lifetime_days", 0)
+    addr_mismatch = "Yes" if int(case_row.get("address_mismatch", 0)) else "No"
+    cb_reason = case_row.get("chargeback_reason", "None")
+    cb_won = case_row.get("chargebacks_won", 0)
+    action_reason = case_row.get("action_reason", "")
+
     return f"""
 Selected Order Case Details
 
 Order ID: {case_row["order_id"]}
 Customer ID: {case_row["customer_id"]}
+Customer Lifetime: {lifetime} days
 
 Risk Type: {case_row["risk_type_display"]}
 Priority Tier: {case_row["priority_tier"]}
@@ -638,11 +782,20 @@ Fraud Score: {case_row["fraud_score"]}
 Return Risk Score: {case_row["return_risk_score"]}
 Unified Risk Score: {case_row["unified_risk_score"]}
 
-Past Returns: {case_row["past_returns"]}
-Chargeback History: {case_row["chargeback_history"]}
+Behavioral Signals:
+- Device Risk: {device_risk}
+- Order Velocity (last 24h): {velocity} orders from this customer
+- Billing/Shipping Address Mismatch: {addr_mismatch}
+- Past Returns: {case_row["past_returns"]}
+- Chargeback History: {case_row["chargeback_history"]}
+- Chargeback Reason: {cb_reason}
+- Chargebacks Won in Appeals: {cb_won}
 
 Risk Explanation:
 {case_row["risk_reason_summary"]}
+
+Action Decision Reason:
+{action_reason}
 
 Recommended Action:
 {case_row["recommended_action"]}
@@ -868,15 +1021,32 @@ if df is None:
         st.code("python generate_data.py")
     st.stop()
 
-df = ensure_latest_action_taken(df)
+df = ensure_ops_action_tracking(ensure_latest_action_taken(df))
+
+working_data_key = f"{data_source_label}:{shopify_limit}"
+if st.session_state.get("_working_data_key") != working_data_key:
+    st.session_state["working_df"] = df.copy()
+    st.session_state["_working_data_key"] = working_data_key
+else:
+    df = ensure_ops_action_tracking(st.session_state["working_df"])
 
 if data_source == "shopify":
     st.sidebar.markdown("---")
     if st.sidebar.button("Save Shopify Sync to CSV"):
-        saved_path = save_synced_data(df)
+        saved_path = save_synced_data(st.session_state["working_df"])
+        load_data.clear()
         st.sidebar.success(f"Saved {len(df):,} rows to {saved_path}")
         log_event("shopify_sync_saved", {
             "rows": len(df),
+            "path": saved_path,
+        })
+elif data_source in {"csv", "saved_shopify"}:
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Save Action Updates to CSV"):
+        saved_path = persist_action_updates(st.session_state["working_df"], data_source)
+        st.sidebar.success(f"Saved action updates to {saved_path}")
+        log_event("ops_action_updates_saved", {
+            "rows": len(st.session_state["working_df"]),
             "path": saved_path,
         })
 
@@ -1062,8 +1232,10 @@ render_hero_summary(metrics, top_category, top_state)
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total Orders", f'{metrics["total_orders"]:,}')
 c2.metric("Flagged Orders", f'{metrics["flagged_orders"]:,}')
+
 c3.metric("Flagged %", f'{metrics["flagged_pct"]:.1f}%')
 c4.metric("Fraud Cases", f'{metrics["fraud_cases"]:,}')
+
 c5.metric("Return Risk Cases", f'{metrics["return_cases"]:,}')
 c6.metric("Revenue at Risk", format_currency(metrics["revenue_at_risk"]))
 
@@ -1072,9 +1244,9 @@ render_today_action_panel(today_actions)
 
 st.markdown("---")
 
-tab_ov, tab_rq, tab_fr, tab_rt, tab_ac, tab_cp = st.tabs(
-    ["Overview", "Review Queue", "Fraud Risk",
-        "Return Risk", "Recommended Actions", "Risk Copilot"]
+tab_ov, tab_cp, tab_rq, tab_fr, tab_rt = st.tabs(
+    ["Overview", "Risk Copilot", "Review Queue",
+        "Fraud Risk", "Return Risk"]
 )
 
 # ── Tab 1: Overview ──────────────────────────────────────────────────────────────
@@ -1186,6 +1358,18 @@ with tab_ov:
             ), x_tickangle=-15),
             use_container_width=True
         )
+
+    render_insight_footer(metrics, top_category, top_state)
+
+    with st.expander("Show raw filtered data"):
+        st.dataframe(filtered_df.head(200), use_container_width=True)
+
+    with st.expander("Show event log (demo tracking)"):
+        event_log_df = pd.DataFrame(st.session_state.get("event_log", []))
+        if event_log_df.empty:
+            st.caption("No tracked events yet in this session.")
+        else:
+            st.dataframe(event_log_df, use_container_width=True)
 
 # ── Tab 3: Fraud Risk ─────────────────────────────────────────────────────────────
 
@@ -1341,142 +1525,14 @@ with tab_rt:
             use_container_width=True
         )
 
-# ── Tab 5: Recommended Actions ────────────────────────────────────────────────────
-
-with tab_ac:
-    log_once("tab_action_center_seen", "tab_view", {"tab": "Recommended Actions"})
-    st.subheader("Recommended Actions")
-
-    open_flagged_cases = filtered_df[
-        (filtered_df["risk_level"] == "High") & (
-            filtered_df["case_status"] == "Open")
-    ].copy()
-
-    closed_flagged_cases = filtered_df[
-        (filtered_df["risk_level"] == "High") & (
-            filtered_df["case_status"] == "Closed")
-    ].copy()
-
-    potential_loss_prevented = float(closed_flagged_cases["order_value"].sum())
-    closure_rate = (
-        round(len(closed_flagged_cases) /
-              (len(open_flagged_cases) + len(closed_flagged_cases)) * 100, 1)
-        if (len(open_flagged_cases) + len(closed_flagged_cases)) > 0 else 0.0
-    )
-
-    kc1, kc2, kc3, kc4 = st.columns(4)
-    kc1.metric("Open Flagged Cases", f"{len(open_flagged_cases):,}")
-    kc2.metric("Closed Flagged Cases", f"{len(closed_flagged_cases):,}")
-    kc3.metric("Protected Revenue", format_currency(potential_loss_prevented))
-    kc4.metric("Closure Rate", f"{closure_rate:.1f}%")
-
-    render_outcome_summary(
-        len(closed_flagged_cases),
-        potential_loss_prevented,
-        len(open_flagged_cases),
-    )
-
-    ac1, ac2 = st.columns(2)
-
-    action_summary = (
-        filtered_df.groupby(
-            ["recommended_action", "action_owner",
-                "automation_level", "priority_tier", "case_status"],
-            as_index=False
-        )
-        .agg(
-            orders=("order_id", "count"),
-            revenue=("order_value", "sum"),
-            avg_risk_score=("unified_risk_score", "mean")
-        )
-        .sort_values(["orders", "revenue"], ascending=False)
-    )
-
-    if action_summary.empty:
-        st.warning("No action summary available for the selected filters.")
-    else:
-        ac1.plotly_chart(
-            style_chart(px.bar(
-                action_summary,
-                x="recommended_action",
-                y="orders",
-                color="automation_level",
-                title="Action Volume by Recommendation",
-                labels={"recommended_action": "Recommended Action",
-                        "orders": "Number of Cases", "automation_level": "Automation Level"},
-            ), showlegend=True, x_tickangle=-20),
-            use_container_width=True
-        )
-
-        ac2.plotly_chart(
-            style_chart(px.bar(
-                action_summary,
-                x="action_owner",
-                y="orders",
-                color="priority_tier",
-                title="Action Ownership by Priority",
-                labels={"action_owner": "Action Owner",
-                        "orders": "Number of Cases", "priority_tier": "Priority Tier"},
-                color_discrete_map=PRIORITY_COLORS,
-            ), showlegend=True, x_tickangle=-15),
-            use_container_width=True
-        )
-
-        st.markdown("### AI Workflow Recommendations")
-        st.dataframe(
-            action_summary.style.format({
-                "revenue": "${:,.2f}",
-                "avg_risk_score": "{:.3f}",
-            }),
-            use_container_width=True
-        )
-
-    st.markdown("### Sample Action Queue")
-    action_queue = filtered_df[
-        [
-            "order_id", "customer_id", "risk_type_display", "priority_tier", "case_status",
-            "workflow_stage", "latest_action_taken", "recommended_action", "ai_agent_next_step", "action_owner",
-            "automation_level", "risk_reason_summary", "order_value", "unified_risk_score"
-        ]
-    ].rename(columns={"risk_type_display": "risk_type"}).sort_values(
-        ["unified_risk_score", "order_value"], ascending=[False, False]
-    ).head(50)
-
-    st.dataframe(
-        action_queue.style.format({
-            "order_value": "${:,.2f}",
-            "unified_risk_score": "{:.3f}",
-        }),
-        use_container_width=True
-    )
-
-    st.markdown("### Resolved Flagged Cases")
-    if closed_flagged_cases.empty:
-        st.info("No resolved flagged cases in the current filter selection.")
-    else:
-        resolved_view = closed_flagged_cases[
-            [
-                "order_id", "customer_id", "order_date", "risk_type_display", "priority_tier",
-                "recommended_action", "workflow_stage", "latest_action_taken", "order_value",
-                "unified_risk_score", "risk_reason_summary", "action_owner"
-            ]
-        ].rename(columns={"risk_type_display": "risk_type"}).sort_values(
-            ["unified_risk_score", "order_value"], ascending=[False, False]
-        ).head(50)
-
-        st.dataframe(
-            resolved_view.style.format({
-                "order_value": "${:,.2f}",
-                "unified_risk_score": "{:.3f}",
-            }),
-            use_container_width=True
-        )
-
 # ── Tab 2: Review Queue ───────────────────────────────────────────────────────────
 
 with tab_rq:
     log_once("tab_ops_queue_seen", "tab_view", {"tab": "Review Queue"})
     st.subheader("Review Queue")
+
+    if st.session_state.get("last_ops_action_notice"):
+        st.success(st.session_state.pop("last_ops_action_notice"))
 
     flagged_df = sort_cases_by_priority(get_open_high_risk_cases(filtered_df))
     closed_flagged_cases = filtered_df[
@@ -1493,83 +1549,74 @@ with tab_rq:
         if (len(flagged_df) + len(closed_flagged_cases)) > 0 else 0.0
     )
 
-    oq1, oq2, oq3, oq4, oq5 = st.columns(5)
+    oq1, oq2, oq3, oq4 = st.columns(4)
     oq1.metric("Open High-Risk Cases", f"{len(flagged_df):,}")
     oq2.metric(
-        "Open Revenue at Risk",
+        "Open Revenue",
         format_currency(
             float(flagged_df["order_value"].sum()) if not flagged_df.empty else 0.0)
     )
-    oq3.metric("Closed Flagged Cases", f"{len(closed_flagged_cases):,}")
-    oq4.metric("Protected Revenue", format_currency(protected_revenue))
-    oq5.metric("Closure Rate", f"{closure_rate:.1f}%")
+    oq3.metric("Protected Revenue", format_currency(protected_revenue))
+    oq4.metric("Closure Rate", f"{closure_rate:.1f}%")
 
-    qc1, qc2 = st.columns(2)
-    download_open_cases = qc1.download_button(
-        label="Download Open Cases CSV",
-        data=to_csv_download(flagged_df.drop(
-            columns=["priority_sort", "risk_type_display"], errors="ignore")),
-        file_name="aignita_open_cases.csv",
-        mime="text/csv",
-        key="download_open_cases"
-    )
-    if download_open_cases:
-        log_event("download_clicked", {"file": "aignita_open_cases.csv"})
+    if st.session_state.get("ops_action_log"):
+        with st.expander("Recent operations actions", expanded=False):
+            ops_action_log_df = pd.DataFrame(st.session_state["ops_action_log"])
+            st.dataframe(
+                ops_action_log_df[
+                    [
+                        "ts", "order_id", "customer_id", "action", "actor",
+                        "case_status", "workflow_stage", "latest_action_taken", "note",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
-    download_filtered_dataset = qc2.download_button(
-        label="Download All Cases CSV",
-        data=to_csv_download(all_flagged_cases.drop(
-            columns=["priority_sort", "risk_type_display"], errors="ignore")),
-        file_name="aignita_flagged_cases.csv",
-        mime="text/csv",
-        key="download_filtered_dataset"
-    )
-    if download_filtered_dataset:
-        log_event("download_clicked", {"file": "aignita_flagged_cases.csv"})
+    with st.expander("Downloads", expanded=False):
+        qc1, qc2 = st.columns(2)
+        download_open_cases = qc1.download_button(
+            label="Download Open Cases CSV",
+            data=to_csv_download(flagged_df.drop(
+                columns=["priority_sort", "risk_type_display"], errors="ignore")),
+            file_name="aignita_open_cases.csv",
+            mime="text/csv",
+            key="download_open_cases"
+        )
+        if download_open_cases:
+            log_event("download_clicked", {"file": "aignita_open_cases.csv"})
+
+        download_filtered_dataset = qc2.download_button(
+            label="Download All Flagged Cases CSV",
+            data=to_csv_download(all_flagged_cases.drop(
+                columns=["priority_sort", "risk_type_display"], errors="ignore")),
+            file_name="aignita_flagged_cases.csv",
+            mime="text/csv",
+            key="download_filtered_dataset"
+        )
+        if download_filtered_dataset:
+            log_event("download_clicked", {"file": "aignita_flagged_cases.csv"})
 
     if flagged_df.empty:
         st.warning("No open cases in the current filter selection.")
     else:
-        st.markdown("### Top 5 Orders to Review First")
-        top_review_cases = flagged_df[
-            [
-                "order_id", "customer_id", "risk_type_display", "priority_tier",
-                "recommended_action", "latest_action_taken", "order_value", "unified_risk_score",
-                "risk_reason_summary"
-            ]
-        ].rename(columns={"risk_type_display": "risk_type"}).head(5)
+        with st.expander("Show open cases", expanded=False):
+            open_case_view = flagged_df[
+                [
+                    "order_id", "customer_id", "order_value", "unified_risk_score",
+                    "risk_type_display", "priority_tier", "workflow_stage",
+                    "recommended_action", "latest_action_taken", "risk_reason_summary",
+                ]
+            ].rename(columns={"risk_type_display": "risk_type"}).head(50)
 
-        st.dataframe(
-            top_review_cases.style.format({
-                "order_value": "${:,.2f}",
-                "unified_risk_score": "{:.3f}",
-            }),
-            use_container_width=True
-        )
+            st.dataframe(
+                open_case_view.style.format({
+                    "order_value": "${:,.2f}",
+                    "unified_risk_score": "{:.3f}",
+                }),
+                use_container_width=True
+            )
 
-        st.markdown("### Full Review Queue")
-        open_case_view = flagged_df[
-            [
-                "order_id", "customer_id", "order_date", "product_category", "product_name",
-                "country", "state", "payment_method", "order_value",
-                "fraud_score", "return_risk_score", "unified_risk_score",
-                "risk_type_display", "priority_tier", "case_status", "workflow_stage",
-                "latest_action_taken", "risk_reason_summary", "recommended_action", "ai_agent_next_step",
-                "action_owner", "automation_level"
-            ]
-        ].rename(columns={"risk_type_display": "risk_type"}).head(100)
-
-        st.dataframe(
-            open_case_view.style.format({
-                "order_value": "${:,.2f}",
-                "fraud_score": "{:.3f}",
-                "return_risk_score": "{:.3f}",
-                "unified_risk_score": "{:.3f}",
-            }),
-            use_container_width=True
-        )
-
-        st.markdown("---")
         st.markdown("### Selected Case")
 
         case_options = flagged_df["order_id"].tolist()
@@ -1597,123 +1644,187 @@ with tab_rq:
 
         render_case_detail_box(selected_case)
 
-        st.markdown("#### Key Risk Signals")
-        signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(5)
-        signal_col1.metric(
-            "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
-        signal_col2.metric("Return Risk Score",
-                           f'{float(selected_case["return_risk_score"]):.3f}')
-        signal_col3.metric("Unified Risk Score",
-                           f'{float(selected_case["unified_risk_score"]):.3f}')
-        signal_col4.metric(
-            "Past Returns", f'{int(selected_case["past_returns"])}')
-        signal_col5.metric("Chargeback History",
-                           f'{int(selected_case["chargeback_history"])}')
+        with st.expander("Case signals and timeline", expanded=False):
+            st.markdown("#### Risk Signals")
+            signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(5)
+            signal_col1.metric(
+                "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
+            signal_col2.metric("Return Risk Score",
+                               f'{float(selected_case["return_risk_score"]):.3f}')
+            signal_col3.metric("Unified Risk Score",
+                               f'{float(selected_case["unified_risk_score"]):.3f}')
+            signal_col4.metric(
+                "Past Returns", f'{int(selected_case["past_returns"])}')
+            signal_col5.metric("Chargeback History",
+                               f'{int(selected_case["chargeback_history"])}')
 
-        timeline_steps = build_case_timeline(selected_case)
-        components.html(render_timeline_html(timeline_steps),
-                        height=190, scrolling=False)
+            st.markdown("#### Behavioral Signals")
+            bsig1, bsig2, bsig3, bsig4, bsig5 = st.columns(5)
+            bsig1.metric("Device Risk", str(selected_case.get("device_risk", "Unknown")))
+            bsig2.metric("Order Velocity (24h)", f'{int(selected_case.get("velocity_flag", 0))} orders')
+            bsig3.metric("Customer Lifetime", f'{int(selected_case.get("customer_lifetime_days", 0))} days')
+            bsig4.metric("Address Mismatch", "Yes" if int(selected_case.get("address_mismatch", 0)) else "No")
+            bsig5.metric("Chargeback Reason", str(selected_case.get("chargeback_reason", "None")))
 
-        st.markdown("---")
-        st.markdown("### Ask About This Case")
-        st.caption("Let analysts ask focused questions about the selected case.")
+            timeline_steps = build_case_timeline(selected_case)
+            components.html(render_timeline_html(timeline_steps),
+                            height=190, scrolling=False)
 
-        case_sample_cols = st.columns(3)
-        if case_sample_cols[0].button("Why was this case flagged?"):
-            st.session_state["case_question"] = "Why was this case flagged?"
-        if case_sample_cols[1].button("What should I do next?"):
-            st.session_state["case_question"] = "What should I do next on this case?"
-        if case_sample_cols[2].button("Is verification needed?"):
-            st.session_state["case_question"] = "Is customer verification needed for this case?"
+        with st.expander("Case copilot and templates", expanded=False):
+            st.markdown("#### Ask About This Case")
+            case_sample_cols = st.columns(3)
+            if case_sample_cols[0].button("Why was this case flagged?"):
+                st.session_state["case_question"] = "Why was this case flagged?"
+            if case_sample_cols[1].button("What should I do next?"):
+                st.session_state["case_question"] = "What should I do next on this case?"
+            if case_sample_cols[2].button("Is verification needed?"):
+                st.session_state["case_question"] = "Is customer verification needed for this case?"
 
-        case_sample_cols2 = st.columns(3)
-        if case_sample_cols2[0].button("Summarize this case"):
-            st.session_state["case_question"] = "Summarize this case."
-        if case_sample_cols2[1].button("Explain fraud signals"):
-            st.session_state["case_question"] = "Explain the fraud signals in this case."
-        if case_sample_cols2[2].button("Explain return risk signals"):
-            st.session_state["case_question"] = "Explain the return risk signals in this case."
+            case_question = st.text_input(
+                "Ask about the selected case",
+                value=st.session_state.get("case_question", "Why was this case flagged?")
+            )
 
-        case_question = st.text_input(
-            "Ask about the selected case",
-            value=st.session_state.get("case_question", "Why was this case flagged?")
-        )
+            case_mode = st.radio(
+                "Case Response Mode",
+                ["AI Analyst", "Quick Case Insights"],
+                index=1,
+                horizontal=True,
+                key="case_mode_radio"
+            )
 
-        case_mode = st.radio(
-            "Case Response Mode",
-            ["AI Analyst", "Quick Case Insights"],
-            index=1,
-            horizontal=True,
-            key="case_mode_radio"
-        )
+            if not GROQ_API_KEY:
+                st.caption(
+                    "AI Analyst mode requires a configured GROQ_API_KEY. Quick Case Insights works without it.")
 
-        if not GROQ_API_KEY:
+            if case_question:
+                if st.session_state.get("last_case_question_logged") != {
+                    "order_id": selected_order_id,
+                    "question": case_question,
+                    "mode": case_mode,
+                }:
+                    log_event("case_question_submitted", {
+                        "order_id": selected_order_id,
+                        "question": case_question,
+                        "mode": case_mode,
+                    })
+                    st.session_state["last_case_question_logged"] = {
+                        "order_id": selected_order_id,
+                        "question": case_question,
+                        "mode": case_mode,
+                    }
+
+                with st.spinner("Analyzing selected case..."):
+                    if case_mode == "AI Analyst":
+                        case_answer = ask_case_copilot(
+                            case_question, selected_case)
+                    else:
+                        case_answer = answer_case_question(
+                            case_question, selected_case)
+
+                st.markdown("#### Case Answer")
+                render_ai_answer(case_answer)
+
+            st.markdown("#### Templates")
+            render_verification_templates(
+                order_id=str(selected_case["order_id"]),
+                customer_id=str(selected_case["customer_id"]),
+            )
+
+            ops_col1, ops_col2 = st.columns(2)
+
+            with ops_col1:
+                if st.button("Draft Customer Verification Message"):
+                    log_event("case_artifact_generated", {
+                        "artifact_type": "customer_verification_draft",
+                        "order_id": selected_order_id
+                    })
+                    with st.spinner("Generating verification draft..."):
+                        st.session_state["case_output"] = generate_ai_output(
+                            "customer_verification_draft",
+                            filtered_df,
+                            selected_case
+                        )
+
+            with ops_col2:
+                if st.button("Create Ops Action Plan"):
+                    log_event("case_artifact_generated", {
+                        "artifact_type": "ops_action_plan",
+                        "order_id": selected_order_id
+                    })
+                    with st.spinner("Generating ops plan..."):
+                        st.session_state["case_output"] = generate_ai_output(
+                            "ops_action_plan",
+                            filtered_df,
+                            selected_case
+                        )
+
+            if "case_output" in st.session_state and st.session_state["case_output"]:
+                st.markdown("#### Generated Case Output")
+                render_ai_output(st.session_state["case_output"])
+
+        st.markdown("### Operations Action")
+        action_status = str(selected_case.get("ops_action_taken", "")).strip()
+        action_actor = str(selected_case.get("ops_action_by", "")).strip()
+        action_at = str(selected_case.get("ops_action_at", "")).strip()
+        if action_status:
             st.caption(
-                "AI Analyst mode requires a configured GROQ_API_KEY. Quick Case Insights works without it.")
+                f"Last ops action: {action_status}"
+                f"{f' by {action_actor}' if action_actor else ''}"
+                f"{f' at {action_at}' if action_at else ''}"
+            )
 
-        if case_question:
-            if st.session_state.get("last_case_question_logged") != {
+        with st.form(key=f"ops_action_form_{selected_order_id}"):
+            ops_form_col1, ops_form_col2 = st.columns(2)
+            with ops_form_col1:
+                ops_action = st.selectbox(
+                    "Action taken by operations",
+                    options=list(OPS_ACTIONS.keys()),
+                    key=f"ops_action_select_{selected_order_id}",
+                )
+            with ops_form_col2:
+                ops_actor = st.text_input(
+                    "Action owner",
+                    value=str(selected_case.get("action_owner", "Operations Team")),
+                    key=f"ops_actor_{selected_order_id}",
+                )
+            ops_note = st.text_area(
+                "Action note",
+                value=str(selected_case.get("ops_action_note", "")),
+                key=f"ops_note_{selected_order_id}",
+                height=90,
+            )
+            submit_ops_action = st.form_submit_button("Record Operations Action")
+
+        if submit_ops_action:
+            updated_df = apply_ops_action(
+                st.session_state["working_df"],
+                selected_order_id,
+                ops_action,
+                ops_actor,
+                ops_note,
+            )
+            st.session_state["working_df"] = updated_df
+            updated_case = updated_df[
+                updated_df["order_id"].astype(str) == str(selected_order_id)
+            ].iloc[0]
+            add_ops_action_session_event(
+                updated_case,
+                ops_action,
+                ops_actor,
+                ops_note,
+            )
+            log_event("ops_action_recorded", {
                 "order_id": selected_order_id,
-                "question": case_question,
-                "mode": case_mode,
-            }:
-                log_event("case_question_submitted", {
-                    "order_id": selected_order_id,
-                    "question": case_question,
-                    "mode": case_mode,
-                })
-                st.session_state["last_case_question_logged"] = {
-                    "order_id": selected_order_id,
-                    "question": case_question,
-                    "mode": case_mode,
-                }
-
-            with st.spinner("Analyzing selected case..."):
-                if case_mode == "AI Analyst":
-                    case_answer = ask_case_copilot(
-                        case_question, selected_case)
-                else:
-                    case_answer = answer_case_question(
-                        case_question, selected_case)
-
-            st.markdown("#### Case Answer")
-            render_ai_answer(case_answer)
-
-        st.markdown("---")
-        st.markdown("### Case Action Assistant")
-        st.caption("Create analyst-ready outputs based on the selected case.")
-
-        ops_col1, ops_col2 = st.columns(2)
-
-        with ops_col1:
-            if st.button("Draft Customer Verification Message"):
-                log_event("case_artifact_generated", {
-                    "artifact_type": "customer_verification_draft",
-                    "order_id": selected_order_id
-                })
-                with st.spinner("Generating verification draft..."):
-                    st.session_state["case_output"] = generate_ai_output(
-                        "customer_verification_draft",
-                        filtered_df,
-                        selected_case
-                    )
-
-        with ops_col2:
-            if st.button("Create Ops Action Plan"):
-                log_event("case_artifact_generated", {
-                    "artifact_type": "ops_action_plan",
-                    "order_id": selected_order_id
-                })
-                with st.spinner("Generating ops plan..."):
-                    st.session_state["case_output"] = generate_ai_output(
-                        "ops_action_plan",
-                        filtered_df,
-                        selected_case
-                    )
-
-        if "case_output" in st.session_state and st.session_state["case_output"]:
-            st.markdown("#### Generated Case Output")
-            render_ai_output(st.session_state["case_output"])
+                "action": ops_action,
+                "actor": ops_actor.strip() or "Operations Team",
+            })
+            saved_path = persist_action_updates(updated_df, data_source)
+            st.session_state["selected_case"] = updated_case
+            st.session_state["last_ops_action_notice"] = (
+                f"Recorded {ops_action} for order {selected_order_id} and saved it to {saved_path}."
+            )
+            st.rerun()
 
 # ── Tab 6: Risk Copilot ───────────────────────────────────────────────────────────
 
@@ -1792,62 +1903,44 @@ with tab_cp:
         st.markdown("### Copilot Answer")
         render_ai_answer(answer)
 
-    st.markdown("---")
-    st.markdown("### Generate Strategic Outputs")
-    st.caption(
-        "Create merchant-facing and policy-oriented outputs from the current dashboard view.")
+    with st.expander("Generate briefs and recommendations", expanded=False):
+        ag1, ag2, ag3 = st.columns(3)
+        with ag1:
+            if st.button("Generate Merchant Action Brief"):
+                log_event("strategic_artifact_generated", {
+                    "artifact_type": "merchant_action_brief"
+                })
+                with st.spinner("Generating merchant action brief..."):
+                    st.session_state["strategic_output"] = generate_ai_output(
+                        "merchant_action_brief",
+                        filtered_df,
+                        st.session_state.get("selected_case", None)
+                    )
 
-    ag1, ag2, ag3 = st.columns(3)
-    with ag1:
-        if st.button("Generate Merchant Action Brief"):
-            log_event("strategic_artifact_generated", {
-                "artifact_type": "merchant_action_brief"
-            })
-            with st.spinner("Generating merchant action brief..."):
-                st.session_state["strategic_output"] = generate_ai_output(
-                    "merchant_action_brief",
-                    filtered_df,
-                    st.session_state.get("selected_case", None)
-                )
+        with ag2:
+            if st.button("Generate Merchant Summary"):
+                log_event("strategic_artifact_generated", {
+                    "artifact_type": "merchant_summary"
+                })
+                with st.spinner("Generating merchant summary..."):
+                    st.session_state["strategic_output"] = generate_ai_output(
+                        "merchant_summary",
+                        filtered_df,
+                        st.session_state.get("selected_case", None)
+                    )
 
-    with ag2:
-        if st.button("Generate Merchant Summary"):
-            log_event("strategic_artifact_generated", {
-                "artifact_type": "merchant_summary"
-            })
-            with st.spinner("Generating merchant summary..."):
-                st.session_state["strategic_output"] = generate_ai_output(
-                    "merchant_summary",
-                    filtered_df,
-                    st.session_state.get("selected_case", None)
-                )
-
-    with ag3:
-        if st.button("Generate Policy Recommendation"):
-            log_event("strategic_artifact_generated", {
-                "artifact_type": "policy_recommendation"
-            })
-            with st.spinner("Generating policy recommendation..."):
-                st.session_state["strategic_output"] = generate_ai_output(
-                    "policy_recommendation",
-                    filtered_df,
-                    st.session_state.get("selected_case", None)
-                )
+        with ag3:
+            if st.button("Generate Policy Recommendation"):
+                log_event("strategic_artifact_generated", {
+                    "artifact_type": "policy_recommendation"
+                })
+                with st.spinner("Generating policy recommendation..."):
+                    st.session_state["strategic_output"] = generate_ai_output(
+                        "policy_recommendation",
+                        filtered_df,
+                        st.session_state.get("selected_case", None)
+                    )
 
     if "strategic_output" in st.session_state and st.session_state["strategic_output"]:
         st.markdown("### Generated Strategic Output")
         render_ai_output(st.session_state["strategic_output"])
-
-# ── Footer ────────────────────────────────────────────────────────────────────────
-
-render_insight_footer(metrics, top_category, top_state)
-
-with st.expander("Show raw filtered data"):
-    st.dataframe(filtered_df.head(200), use_container_width=True)
-
-with st.expander("Show event log (demo tracking)"):
-    event_log_df = pd.DataFrame(st.session_state.get("event_log", []))
-    if event_log_df.empty:
-        st.caption("No tracked events yet in this session.")
-    else:
-        st.dataframe(event_log_df, use_container_width=True)

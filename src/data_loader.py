@@ -41,6 +41,10 @@ def derive_latest_action_taken(
         return "Awaiting item inspection"
     if workflow_stage == "High Returner Tagged":
         return "High returner tagged"
+    if workflow_stage == "Escalated to Senior Review":
+        return "Escalated for senior review"
+    if workflow_stage == "Watchlist Monitoring":
+        return "Case under watchlist monitoring"
 
     if recommended_action == "Hold Fulfillment":
         return "Fulfillment held"
@@ -78,6 +82,26 @@ def _finalize_loaded_data(df: pd.DataFrame) -> pd.DataFrame:
             "Returns": "Return Risk",
         })
     )
+
+    # Fill optional enriched columns with safe defaults when absent (e.g. Shopify source)
+    _optional_defaults = {
+        "device_risk": "Known Device",
+        "velocity_flag": 0,
+        "customer_lifetime_days": 0,
+        "address_mismatch": 0,
+        "chargeback_reason": "None",
+        "chargebacks_won": 0,
+        "action_reason": "",
+        "outcome_type": "Pending",
+        "ops_action_taken": "",
+        "ops_action_by": "",
+        "ops_action_at": "",
+        "ops_action_note": "",
+        "ops_action_history": "",
+    }
+    for col, default in _optional_defaults.items():
+        if col not in df.columns:
+            df[col] = default
 
     return df
 

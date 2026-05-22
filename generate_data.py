@@ -23,6 +23,14 @@ payment_methods = ["Stripe", "PayPal", "Shop Pay", "Apple Pay"]
 countries = ["US", "CA", "UK", "AU"]
 states = ["CA", "NY", "TX", "FL", "WA", "NJ", "IL", "GA"]
 
+CHARGEBACK_REASONS = [
+    "Unauthorized Transaction",
+    "Item Not Received",
+    "Not as Described",
+    "Friendly Fraud",
+    "Duplicate Charge",
+]
+
 start_date = datetime(2025, 1, 1)
 data = []
 
@@ -32,6 +40,7 @@ STAGE_MAP = {
         "Review Queue",
         "Verification Sent",
         "Awaiting Customer Response",
+        "Escalated to Senior Review",
         "Resolved",
     ],
     "Restrict Return / Refund": [
@@ -39,6 +48,7 @@ STAGE_MAP = {
         "Review Queue",
         "High Returner Tagged",
         "Awaiting Item Inspection",
+        "Watchlist Monitoring",
         "Resolved",
     ],
     "Soft Review": [
@@ -132,12 +142,23 @@ def build_risk_reason_summary(
     discount_used: int,
     fraud_score: float,
     return_risk_score: float,
+    device_risk: str = "Known Device",
+    velocity_flag: int = 0,
+    address_mismatch: int = 0,
 ):
     reasons = []
 
     if risk_type == "Fraud":
         if chargeback_history > 0:
             reasons.append(f"{chargeback_history} prior chargeback signal(s)")
+        if device_risk == "High-Risk Device":
+            reasons.append("high-risk device fingerprint")
+        elif device_risk == "New Device" and fraud_score >= 0.55:
+            reasons.append("new device on high-value order")
+        if address_mismatch:
+            reasons.append("billing/shipping address mismatch")
+        if velocity_flag >= 3:
+            reasons.append(f"velocity flag ({velocity_flag} orders/24h)")
         if state in ["FL", "NJ"]:
             reasons.append(f"elevated-risk geography: {state}")
         if order_value >= 250:
@@ -168,6 +189,91 @@ def build_risk_reason_summary(
     return " | ".join(reasons[:3])
 
 
+def build_action_reason(
+    recommended_action: str,
+    risk_type: str,
+    order_value: float,
+    chargeback_history: int,
+    state: str,
+    category: str,
+    past_returns: int,
+    past_orders: int,
+    fraud_score: float,
+    return_risk_score: float,
+    device_risk: str,
+    velocity_flag: int,
+    address_mismatch: int,
+) -> str:
+    if recommended_action == "Hold Fulfillment":
+        drivers = []
+        if chargeback_history > 0:
+            drivers.append(f"{chargeback_history} prior chargeback(s)")
+        if device_risk == "High-Risk Device":
+            drivers.append("high-risk device signal")
+        elif device_risk == "New Device" and fraud_score >= 0.55:
+            drivers.append("new device on high-value order")
+        if address_mismatch:
+            drivers.append("billing/shipping address mismatch")
+        if velocity_flag >= 3:
+            drivers.append(f"velocity flag ({velocity_flag} orders/24h)")
+        if state in ["FL", "NJ"]:
+            drivers.append(f"flagged geography ({state})")
+        if order_value >= 300:
+            drivers.append(f"high-value order (${order_value:.0f})")
+        if not drivers:
+            drivers.append(f"elevated fraud score ({fraud_score:.2f})")
+        return "Fulfillment held — " + ", ".join(drivers[:3])
+
+    elif recommended_action == "Restrict Return / Refund":
+        drivers = []
+        return_rate = past_returns / max(past_orders, 1)
+        if past_returns >= 3:
+            drivers.append(f"repeat returner ({past_returns} prior returns)")
+        if return_rate >= 0.35:
+            drivers.append(f"high return rate ({return_rate:.0%})")
+        if category in ["Apparel", "Footwear"]:
+            drivers.append(f"high-return category ({category})")
+        if not drivers:
+            drivers.append(f"elevated return score ({return_risk_score:.2f})")
+        return "Return restricted — " + ", ".join(drivers[:3])
+
+    elif recommended_action == "Soft Review":
+        if risk_type == "Fraud":
+            return f"Moderate fraud signals — analyst review before fulfilling ${order_value:.0f} order"
+        else:
+            return f"Moderate return risk in {category} — review history before approving"
+
+    else:  # Allow
+        return "No significant risk signals — order auto-approved"
+
+
+def derive_outcome_type(
+    case_status: str,
+    recommended_action: str,
+    risk_type: str,
+    rng_val: float,
+) -> str:
+    if case_status != "Closed":
+        return "Pending"
+
+    if recommended_action == "Allow" or risk_type == "None":
+        return "Auto Approved"
+
+    if risk_type == "Fraud":
+        if recommended_action == "Hold Fulfillment":
+            return "Chargeback Prevented" if rng_val < 0.72 else "Fraud Confirmed & Blocked"
+        else:  # Soft Review
+            return "Verified & Released" if rng_val < 0.58 else "Fraud Confirmed & Blocked"
+
+    if risk_type == "Returns":
+        if recommended_action == "Restrict Return / Refund":
+            return "Return Stopped" if rng_val < 0.82 else "Return Approved"
+        else:  # Soft Review
+            return "Return Reviewed & Denied" if rng_val < 0.48 else "Return Approved"
+
+    return "Resolved"
+
+
 def derive_case_status(workflow_stage: str) -> str:
     if workflow_stage == "Resolved":
         return "Closed"
@@ -187,8 +293,7 @@ def assign_case_status_and_stage(risk_level: str, recommended_action: str):
 
     default_weights = {
         3: np.array([0.35, 0.28, 0.37]),
-        4: np.array([0.45, 0.30, 0.18, 0.07]),
-        5: np.array([0.34, 0.26, 0.20, 0.14, 0.06]),
+        6: np.array([0.30, 0.24, 0.18, 0.14, 0.08, 0.06]),
     }
 
     weights = default_weights.get(len(stages))
@@ -226,6 +331,10 @@ def derive_latest_action_taken(
         return "Awaiting item inspection"
     if workflow_stage == "High Returner Tagged":
         return "High returner tagged"
+    if workflow_stage == "Escalated to Senior Review":
+        return "Escalated for senior review"
+    if workflow_stage == "Watchlist Monitoring":
+        return "Case under watchlist monitoring"
 
     if recommended_action == "Hold Fulfillment":
         return "Fulfillment held"
@@ -256,6 +365,21 @@ for i in range(n):
     discount_used = np.random.choice([0, 1], p=[0.65, 0.35])
     expedited_shipping = np.random.choice([0, 1], p=[0.78, 0.22])
 
+    # ── New behavioral signals ───────────────────────────────────────────────────
+    device_risk = np.random.choice(
+        ["Known Device", "New Device", "High-Risk Device"],
+        p=[0.70, 0.22, 0.08]
+    )
+    velocity_flag = int(np.random.choice([0, 1, 2, 3, 4, 5], p=[0.60, 0.18, 0.10, 0.06, 0.04, 0.02]))
+    customer_lifetime_days = int(np.random.randint(0, 2001))
+    address_mismatch = int(np.random.choice([0, 1], p=[0.88, 0.12]))
+
+    chargeback_reason = (
+        np.random.choice(CHARGEBACK_REASONS)
+        if chargeback_history > 0 else "None"
+    )
+    chargebacks_won = int(np.random.binomial(chargeback_history, 0.35))
+
     # ── Fraud score ──────────────────────────────────────────────────────────────
     suspicious_fraud = (
         (state in ["FL", "NJ"])
@@ -269,6 +393,10 @@ for i in range(n):
         + 0.08 * (order_value > 300)
         + 0.05 * expedited_shipping
         + 0.12 * suspicious_fraud
+        + 0.09 * (device_risk == "High-Risk Device")
+        + 0.04 * (device_risk == "New Device")
+        + 0.05 * min(velocity_flag / 5.0, 1.0)
+        + 0.06 * address_mismatch
         + np.random.normal(0, 0.04)
     )
 
@@ -331,6 +459,25 @@ for i in range(n):
         discount_used=discount_used,
         fraud_score=fraud_score,
         return_risk_score=return_risk_score,
+        device_risk=device_risk,
+        velocity_flag=velocity_flag,
+        address_mismatch=address_mismatch,
+    )
+
+    action_reason = build_action_reason(
+        recommended_action=action_info["recommended_action"],
+        risk_type=risk_type,
+        order_value=order_value,
+        chargeback_history=chargeback_history,
+        state=state,
+        category=category,
+        past_returns=past_returns,
+        past_orders=past_orders,
+        fraud_score=fraud_score,
+        return_risk_score=return_risk_score,
+        device_risk=device_risk,
+        velocity_flag=velocity_flag,
+        address_mismatch=address_mismatch,
     )
 
     case_status, workflow_stage = assign_case_status_and_stage(
@@ -341,6 +488,14 @@ for i in range(n):
         action_info["recommended_action"],
         case_status,
         workflow_stage,
+    )
+
+    outcome_rng = float(np.random.random())
+    outcome_type = derive_outcome_type(
+        case_status=case_status,
+        recommended_action=action_info["recommended_action"],
+        risk_type=risk_type,
+        rng_val=outcome_rng,
     )
 
     data.append(
@@ -359,6 +514,12 @@ for i in range(n):
             "chargeback_history": chargeback_history,
             "discount_used": discount_used,
             "expedited_shipping": expedited_shipping,
+            "device_risk": device_risk,
+            "velocity_flag": velocity_flag,
+            "customer_lifetime_days": customer_lifetime_days,
+            "address_mismatch": address_mismatch,
+            "chargeback_reason": chargeback_reason,
+            "chargebacks_won": chargebacks_won,
             "fraud_score": round(fraud_score, 3),
             "return_risk_score": round(return_risk_score, 3),
             "unified_risk_score": unified_risk_score,
@@ -368,11 +529,13 @@ for i in range(n):
             "ai_agent_next_step": action_info["ai_agent_next_step"],
             "action_owner": action_info["action_owner"],
             "automation_level": action_info["automation_level"],
+            "action_reason": action_reason,
             "risk_reason_summary": risk_reason_summary,
             "priority_tier": priority_tier,
             "case_status": case_status,
             "workflow_stage": workflow_stage,
             "latest_action_taken": latest_action_taken,
+            "outcome_type": outcome_type,
         }
     )
 
@@ -398,6 +561,12 @@ print(df["case_status"].value_counts())
 
 print("\nWorkflow Stage Distribution:")
 print(df["workflow_stage"].value_counts())
+
+print("\nOutcome Type Distribution:")
+print(df["outcome_type"].value_counts())
+
+print("\nDevice Risk Distribution:")
+print(df["device_risk"].value_counts())
 
 print("\nDataset created: data/transactions.csv")
 print(df.head())

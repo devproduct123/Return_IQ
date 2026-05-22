@@ -48,3 +48,25 @@ def compute_summary_metrics(data: pd.DataFrame):
         "closed_cases": closed_cases,
         "protected_revenue": protected_revenue,
     }
+
+
+def compute_outcome_breakdown(data: pd.DataFrame) -> dict[str, dict]:
+    """Break protected revenue into outcome categories for closed flagged cases."""
+    if "outcome_type" not in data.columns:
+        return {}
+
+    closed_flagged = data[
+        (data["risk_level"] == "High")
+        & (data["case_status"] == "Closed")
+        & (~data["outcome_type"].isin(["Pending", "Auto Approved", ""]))
+    ]
+
+    breakdown: dict[str, dict] = {}
+    for outcome in closed_flagged["outcome_type"].unique():
+        subset = closed_flagged[closed_flagged["outcome_type"] == outcome]
+        breakdown[outcome] = {
+            "count": len(subset),
+            "revenue": float(subset["order_value"].sum()),
+        }
+
+    return breakdown

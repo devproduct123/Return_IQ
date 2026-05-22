@@ -43,8 +43,7 @@ def render_page_header():
 def render_demo_banner():
     st.markdown("""
 <div class="riq-demo-banner">
-  <b>Demo environment:</b> This prototype uses synthetic order data only. No real
-  merchant, payment, or customer records are displayed.
+  <b>Interested in a pilot?</b> Reach out at <b>dg@aignita.com</b>.
 </div>
 """, unsafe_allow_html=True)
 
@@ -133,7 +132,12 @@ def render_section_note(html_body: str):
     st.markdown(f'<div class="riq-note">{html_body}</div>', unsafe_allow_html=True)
 
 
-def render_outcome_summary(closed_count: int, protected_revenue: float, open_count: int):
+def render_outcome_summary(
+    closed_count: int,
+    protected_revenue: float,
+    open_count: int,
+    breakdown: dict | None = None,
+):
     st.markdown(f"""
 <div class="riq-note" style="border-left-color:#16a34a;">
   <b>Outcome Summary:</b> {closed_count:,} resolved flagged cases protecting
@@ -141,6 +145,39 @@ def render_outcome_summary(closed_count: int, protected_revenue: float, open_cou
   <b style="color:#dc2626;">{open_count:,}</b> flagged cases remain active for review.
 </div>
 """, unsafe_allow_html=True)
+
+    if not breakdown:
+        return
+
+    _OUTCOME_ACCENTS = {
+        "Chargeback Prevented": "#16a34a",
+        "Return Stopped": "#d97706",
+        "Fraud Confirmed & Blocked": "#dc2626",
+        "Verified & Released": "#2563eb",
+        "Return Reviewed & Denied": "#7c3aed",
+        "Return Approved": "#64748b",
+    }
+
+    cells = ""
+    for outcome, stats in sorted(breakdown.items(), key=lambda x: -x[1]["revenue"]):
+        accent = _OUTCOME_ACCENTS.get(outcome, "#64748b")
+        label = _html.escape(outcome)
+        count = stats["count"]
+        rev = format_currency(stats["revenue"])
+        cells += f"""<div style="background:#ffffff;border:1px solid #e2e8f0;
+            border-left:3px solid {accent};border-radius:0 6px 6px 0;
+            padding:0.55rem 0.85rem;">
+          <div style="font-size:0.68rem;font-weight:700;text-transform:uppercase;
+            letter-spacing:0.05em;color:{accent};">{label}</div>
+          <div style="font-size:0.92rem;font-weight:700;color:#1e293b;margin-top:2px;">{rev}</div>
+          <div style="font-size:0.75rem;color:#64748b;">{count:,} cases</div>
+        </div>"""
+
+    st.markdown(
+        f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));'
+        f'gap:0.6rem;margin-top:0.5rem;">{cells}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Case components ─────────────────────────────────────────────────────────────
@@ -256,6 +293,60 @@ def render_timeline_html(steps):
 </html>"""
 
 
+# ── Verification templates ──────────────────────────────────────────────────────
+
+_VERIFICATION_TEMPLATES = [
+    {
+        "label": "Hold — Identity Verification",
+        "scenario": "High-fraud score, new customer or flagged geography",
+        "body": (
+            "Hi {customer_id},\n\n"
+            "We're doing a quick security check on order {order_id} before we ship.\n\n"
+            "Could you confirm: (1) the billing address on file, and (2) the last 4 digits "
+            "of your payment card?\n\n"
+            "Reply within 24 hours and we'll get your order on its way. If we don't hear back, "
+            "the order will be held for your protection.\n\n"
+            "Thanks,\nRisk & Trust Team"
+        ),
+    },
+    {
+        "label": "Return — Inspection Required",
+        "scenario": "Repeat returner or high-return-risk product category",
+        "body": (
+            "Hi {customer_id},\n\n"
+            "We received your return request for order {order_id}. Based on your return history, "
+            "we need to inspect the item before processing the refund.\n\n"
+            "Please ship the item back in its original packaging. Once we receive and verify it, "
+            "we'll process your refund or exchange within 3–5 business days.\n\n"
+            "Thanks,\nReturns Team"
+        ),
+    },
+    {
+        "label": "Soft Review — Friendly Check",
+        "scenario": "Moderate signals — order needs brief review before fulfilling",
+        "body": (
+            "Hi {customer_id},\n\n"
+            "We noticed something unusual on order {order_id} and wanted to check in. "
+            "We may need a moment to verify a few details before we ship.\n\n"
+            "No action is needed from you right now — we'll follow up within 4 hours "
+            "if anything is required.\n\n"
+            "Thanks,\nCustomer Trust Team"
+        ),
+    },
+]
+
+
+def render_verification_templates(order_id: str = "{order_id}", customer_id: str = "{customer_id}"):
+    with st.expander("Customer Message Templates", expanded=False):
+        st.caption("Pre-written messages for common risk scenarios. Copy and customize before sending.")
+        for tmpl in _VERIFICATION_TEMPLATES:
+            st.markdown(f"**{_html.escape(tmpl['label'])}**  \n"
+                        f"<span style='font-size:0.78rem;color:#64748b;'>{_html.escape(tmpl['scenario'])}</span>",
+                        unsafe_allow_html=True)
+            body = tmpl["body"].format(order_id=order_id, customer_id=customer_id)
+            st.code(body, language=None)
+
+
 # ── AI output components ────────────────────────────────────────────────────────
 
 def render_ai_answer(text: str):
@@ -284,10 +375,3 @@ def render_insight_footer(metrics: dict, top_category: str, top_state: str):
 """
 
     st.info(insight_text)
-
-    st.markdown("""
-<div class="riq-note" style="border-left-color:#16a34a;margin-top:0.25rem;">
-  <b>Pilot with Aignita:</b> Interested in using RiskIQ for your store or risk operations workflow?
-  Reach out to discuss a pilot or custom implementation.
-</div>
-""", unsafe_allow_html=True)
