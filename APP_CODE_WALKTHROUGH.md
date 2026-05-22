@@ -6,7 +6,7 @@ At a high level, `app.py` does five jobs:
 
 - Loads dependencies, helper functions, data, and optional Groq configuration.
 - Defines the Streamlit page styling and shared Plotly chart styling.
-- Builds dashboard context and selected-case context for AI prompts.
+- Builds dashboard context for Risk Copilot and selected-case context for Review Queue AI prompts.
 - Applies sidebar filters and computes metrics for the filtered dataset.
 - Renders the six main product tabs: Overview, Fraud Risk, Return Abuse, Recommended Actions, Review Queue, and Risk Copilot.
 
@@ -32,7 +32,7 @@ Finally, it imports local project helpers:
 
 - `src.data_loader.load_data` loads `data/transactions.csv`.
 - `src.metrics` provides metric calculation, currency formatting, safe top-value selection, and CSV export formatting.
-- `src.risk_logic` provides deterministic case sorting, timeline generation, fallback case selection, and Quick Insights answers.
+- `src.risk_logic` provides deterministic case sorting, timeline generation, and Quick Insights answers.
 - `src.ui_components` renders reusable visual pieces such as the page header, hero summary, case detail box, AI answer blocks, and timeline HTML.
 
 ## Streamlit Page Setup
@@ -592,7 +592,7 @@ The app logs selected-case changes and stores the selected case in:
 st.session_state["selected_case"]
 ```
 
-This session-state value is later used by the Risk Copilot tab so the broader Copilot can include the selected case.
+This session-state value powers the case-level analyst tools in Review Queue.
 
 The selected case area renders:
 
@@ -656,21 +656,9 @@ The response mode can be:
 
 If no Groq API key is configured, the app explains that Quick Insights still works.
 
-### Selected Case Fallback
+### Portfolio Scope
 
-The Copilot tries to include a selected case from Review Queue:
-
-```python
-selected_case_for_ai = st.session_state.get("selected_case", None)
-```
-
-If no case was manually selected, the app calls:
-
-```python
-select_fallback_case(filtered_df)
-```
-
-This picks the highest-priority open case from the current filters. The UI then shows a banner explaining that Copilot is using a fallback case.
+Risk Copilot answers from the filtered dashboard context only. Selected-order investigation stays in Review Queue through the case copilot and templates.
 
 ### Copilot Answer
 
@@ -733,7 +721,7 @@ The app uses `st.session_state` for several cross-rerun values:
 - `event_log`: list of demo events.
 - `last_filters`: previous filter set used for change logging.
 - `last_selected_order_id`: previous selected case used for change logging.
-- `selected_case`: selected Review Queue case reused by Risk Copilot.
+- `selected_case`: selected Review Queue case used by case-level analyst tools.
 - `case_question`: prefilled or typed case question.
 - `last_case_question_logged`: prevents duplicate case-question logs.
 - `case_output`: generated selected-case artifact.
@@ -747,7 +735,7 @@ The app uses `st.session_state` for several cross-rerun values:
 
 - Dataset loading and validation: `src/data_loader.py`.
 - Metric calculations and formatting: `src/metrics.py`.
-- Case sorting, timeline logic, fallback case selection, and deterministic answers: `src/risk_logic.py`.
+- Case sorting, timeline logic, and deterministic answers: `src/risk_logic.py`.
 - Reusable HTML/CSS UI blocks: `src/ui_components.py`.
 
 This separation keeps the app easier to test and makes future refactoring safer.
@@ -764,6 +752,6 @@ Important gaps include:
 - No durable event/audit log.
 - No real commerce/payment integration.
 - Simulated transaction data.
-- Optional LLM calls may send filtered dashboard and selected-case context to Groq.
+- Optional LLM calls may send filtered dashboard context or selected-case context to Groq, depending on whether the user is in Risk Copilot or Review Queue.
 
 Before production use, the app would need privacy review, redaction, access controls, persistent storage, observability, and model/provider governance.

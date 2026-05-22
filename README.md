@@ -105,9 +105,7 @@ RiskIQ has two answer modes:
 - Quick Insights: deterministic pandas-based responses from `src/risk_logic.py`.
 - AI Copilot / AI Analyst: prompt-and-context responses through Groq.
 
-For AI Copilot flows, `app.py` builds dashboard and selected-case context, sends it to the configured Groq model, and displays the response. The prompts instruct the model to use only supplied context, stay concise, avoid invented facts, and avoid claiming that actions were executed.
-
-If no case has been manually selected in Ops Queue, the broader Copilot flow falls back to the highest-priority open case from the current filters.
+For Risk Copilot flows, `app.py` builds dashboard context from the current filtered queue, sends it to the configured Groq model, and displays the response. Case-level AI Analyst flows stay inside Review Queue and use only the selected order context. The prompts instruct the model to use only supplied context, stay concise, avoid invented facts, and avoid claiming that actions were executed.
 
 ## Design Decisions
 

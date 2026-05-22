@@ -61,13 +61,6 @@ def sort_cases_by_priority(cases: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def select_fallback_case(data: pd.DataFrame):
-    fallback_cases = sort_cases_by_priority(get_open_high_risk_cases(data))
-    if fallback_cases.empty:
-        return None, False
-    return fallback_cases.iloc[0], True
-
-
 def answer_risk_question(question: str, data: pd.DataFrame) -> str:
     q = question.lower().strip()
 

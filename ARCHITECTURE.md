@@ -33,7 +33,7 @@ The app uses pandas for data manipulation, Plotly for charts, Streamlit for UI, 
 4. Sidebar filters are applied to the loaded dataframe.
 5. `src.metrics.compute_summary_metrics` calculates headline metrics.
 6. `app.py` renders tabs, charts, tables, downloads, and selected-case flows.
-7. `src.risk_logic` provides priority sorting, fallback case selection, timeline steps, and Quick Insights.
+7. `src.risk_logic` provides priority sorting, timeline steps, and Quick Insights.
 8. `src.ui_components` renders stable reusable UI blocks.
 9. AI Copilot calls are assembled and executed in `app.py`.
 
@@ -94,11 +94,10 @@ Responsibilities:
 - `build_case_timeline`
 - `get_open_high_risk_cases`
 - `sort_cases_by_priority`
-- `select_fallback_case`
 - `answer_risk_question`
 - `answer_case_question`
 
-This module powers Ops Queue ordering, selected-case timeline steps, fallback case behavior, and Quick Insights answers.
+This module powers Ops Queue ordering, selected-case timeline steps, and Quick Insights answers.
 
 ### `src/ui_components.py`
 
@@ -144,10 +143,8 @@ The app supports LLM-assisted workflows through Groq when `GROQ_API_KEY` is conf
 
 1. User asks a portfolio-level question in the AI Risk Copilot tab.
 2. `app.py` builds a dashboard context from the current filtered dataframe.
-3. `app.py` includes selected-case context if available.
-4. If no case is selected, `src.risk_logic.select_fallback_case` provides the highest-priority open case from the current filters.
-5. `app.py` sends the prompt and system instructions to Groq.
-6. The response is displayed in Streamlit.
+3. `app.py` sends the dashboard prompt and system instructions to Groq.
+4. The response is displayed in Streamlit.
 
 ### Case Copilot
 

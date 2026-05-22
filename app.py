@@ -27,7 +27,6 @@ from src.risk_logic import (
     answer_risk_question,
     build_case_timeline,
     get_open_high_risk_cases,
-    select_fallback_case,
     sort_cases_by_priority,
 )
 from src.ui_components import (
@@ -824,28 +823,25 @@ def ask_groq(prompt: str, system_prompt: str, max_tokens: int = 600) -> str:
         return f"Groq request failed: {e}"
 
 
-def ask_risk_copilot(question: str, dashboard_data: pd.DataFrame, selected_case: pd.Series | None = None) -> str:
+def ask_risk_copilot(question: str, dashboard_data: pd.DataFrame) -> str:
     dashboard_context = build_dashboard_context(dashboard_data)
-    case_context = build_case_context(selected_case)
 
     system_prompt = """
 You are Aignita RiskIQ Copilot, an AI risk analyst for e-commerce merchants.
 
-You help risk and operations teams understand fraud risk, return abuse, and what actions to take.
+You help risk and operations teams understand portfolio-level fraud risk, return abuse, and what actions to take across the current filtered queue.
 
 Rules:
 - Only use the provided context.
 - Be concise, practical, and business-focused.
 - Prioritize open critical cases first.
+- Answer at the portfolio level. Do not analyze an individual order unless the dashboard context itself names that order.
 - Do not invent facts not present in the context.
 """
 
     user_prompt = f"""
 Dashboard Context:
 {dashboard_context}
-
-Case Context:
-{case_context}
 
 Merchant Question:
 {question}
@@ -1831,7 +1827,7 @@ with tab_rq:
 with tab_cp:
     log_once("tab_ai_copilot_seen", "tab_view", {"tab": "Risk Copilot"})
     st.subheader("Risk Copilot")
-    st.markdown("Use Copilot to **ask broader portfolio questions** and **generate merchant-ready outputs** for risk, policy, and operations workflows.")
+    st.markdown("Use Copilot to **ask broader portfolio questions** and **generate merchant-ready outputs** for risk, policy, and operations workflows. For order-specific investigation, use **Review Queue**.")
 
     st.markdown("### Ask Copilot")
     sample_cols = st.columns(3)
@@ -1879,26 +1875,11 @@ with tab_cp:
                 "mode": copilot_mode,
             }
 
-        selected_case_for_ai = st.session_state.get("selected_case", None)
-        used_fallback_case = False
-
-        if selected_case_for_ai is None:
-            selected_case_for_ai, used_fallback_case = select_fallback_case(
-                filtered_df)
-
-        if used_fallback_case:
-            st.markdown("""
-<div class="riq-demo-banner">
-  No case was manually selected in Review Queue. Copilot is using the highest-priority open case from the current filters.
-</div>
-""", unsafe_allow_html=True)
-
         with st.spinner("Copilot thinking..."):
             if copilot_mode == "Quick Insights":
                 answer = answer_risk_question(question, filtered_df)
             else:
-                answer = ask_risk_copilot(
-                    question, filtered_df, selected_case_for_ai)
+                answer = ask_risk_copilot(question, filtered_df)
 
         st.markdown("### Copilot Answer")
         render_ai_answer(answer)

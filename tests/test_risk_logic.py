@@ -5,7 +5,6 @@ from src.risk_logic import (
     answer_risk_question,
     build_case_timeline,
     get_open_high_risk_cases,
-    select_fallback_case,
     sort_cases_by_priority,
 )
 
@@ -166,23 +165,3 @@ def test_open_high_risk_cases_and_priority_sorting():
     ]
     assert "priority_sort" in sorted_cases.columns
 
-
-def test_select_fallback_case_uses_highest_priority_open_case():
-    selected_case, used_fallback = select_fallback_case(pd.DataFrame([
-        _case_row(order_id="MODERATE", priority_tier="Moderate",
-                  unified_risk_score=0.5, order_value=150.0),
-        _case_row(order_id="HIGH", priority_tier="High",
-                  unified_risk_score=0.8, order_value=200.0),
-    ]))
-
-    assert used_fallback is True
-    assert selected_case["order_id"] == "HIGH"
-
-
-def test_select_fallback_case_handles_no_open_cases():
-    selected_case, used_fallback = select_fallback_case(pd.DataFrame([
-        _case_row(order_id="CLOSED", case_status="Closed"),
-    ]))
-
-    assert selected_case is None
-    assert used_fallback is False
