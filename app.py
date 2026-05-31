@@ -606,8 +606,9 @@ def ensure_lifecycle_intelligence(data: pd.DataFrame) -> pd.DataFrame:
             data[column] = data[column].fillna(default)
 
     closed_mask = data["case_status"].astype(str).eq("Closed")
-    data.loc[closed_mask & data["ops_resolution"].astype(str).eq("Pending"), "ops_resolution"] = (
-        data.loc[closed_mask, "outcome_type"].astype(str)
+    pending_resolution_mask = closed_mask & data["ops_resolution"].astype(str).eq("Pending")
+    data.loc[pending_resolution_mask, "ops_resolution"] = (
+        data.loc[pending_resolution_mask, "outcome_type"].astype(str)
     )
     confidence = pd.to_numeric(data["label_confidence"], errors="coerce").fillna(0.0)
     data["label_confidence"] = confidence
