@@ -160,6 +160,109 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
     )
 
 
+def _simplify_actual_outcome(row: pd.Series) -> str:
+    outcome_type = str(row.get("outcome_type", ""))
+    risk_type = str(row.get("risk_type", ""))
+    fraud_label = str(row.get("fraud_label", ""))
+
+    if risk_type == "Returns" or outcome_type.startswith("Return"):
+        return "Return Approved" if outcome_type == "Return Approved" else "Return Denied"
+
+    if risk_type == "Fraud" or fraud_label in {"Confirmed", "False Positive"}:
+        if outcome_type == "Verified & Released" or fraud_label == "False Positive":
+            return "Fraud Approved"
+        return "Fraud Denied"
+
+    return "Other"
+
+
+def answer_historical_question(question: str, data: pd.DataFrame) -> str:
+    q = question.lower().strip()
+
+    if data.empty:
+        return "No historical outcome data is available for the current filters."
+
+    view = data.copy()
+    view["actual_outcome"] = view.apply(_simplify_actual_outcome, axis=1)
+    total_orders = len(view)
+    actual_returns = int(view["actual_outcome"].eq("Return Approved").sum())
+    denied_returns = int(view["actual_outcome"].eq("Return Denied").sum())
+    fraud_approved = int(view["actual_outcome"].eq("Fraud Approved").sum())
+    fraud_denied = int(view["actual_outcome"].eq("Fraud Denied").sum())
+    total_loss = float(
+        view.loc[
+            view["actual_outcome"].isin(["Return Approved", "Fraud Approved"]),
+            "order_value",
+        ].sum()
+    )
+    avoided_loss = float(
+        view.loc[
+            view["actual_outcome"].isin(["Return Denied", "Fraud Denied"]),
+            "order_value",
+        ].sum()
+    )
+
+    top_return_category = safe_top_index(
+        view.loc[view["actual_outcome"].eq("Return Approved")]
+        .groupby("product_category")["order_value"]
+        .sum()
+        .sort_values(ascending=False),
+        default="None",
+    )
+    top_return_product = safe_top_index(
+        view.loc[view["actual_outcome"].eq("Return Approved")]
+        .groupby("product_name")["order_value"]
+        .sum()
+        .sort_values(ascending=False),
+        default="None",
+    )
+    top_fraud_state = safe_top_index(
+        view.loc[view["actual_outcome"].eq("Fraud Approved")]
+        .groupby("state")["order_value"]
+        .sum()
+        .sort_values(ascending=False),
+        default="None",
+    )
+    top_fraud_payment = safe_top_index(
+        view.loc[view["actual_outcome"].eq("Fraud Approved")]
+        .groupby("payment_method")["order_value"]
+        .sum()
+        .sort_values(ascending=False),
+        default="None",
+    )
+
+    if "summary" in q or "summarize" in q or "overall" in q:
+        return (
+            f"In the historical view, {total_orders:,} completed orders produced {actual_returns:,} approved returns, "
+            f"{denied_returns:,} denied returns, {fraud_approved:,} fraud-approved/released cases, and "
+            f"{fraud_denied:,} fraud-denied/blocked cases. Total loss was {format_currency(total_loss)}, "
+            f"while avoided exposure was {format_currency(avoided_loss)}."
+        )
+
+    if "return" in q and ("category" in q or "product" in q or "driver" in q):
+        return (
+            f"Approved return loss is highest in category {top_return_category}. "
+            f"The top product by approved return loss is {top_return_product}."
+        )
+
+    if "fraud" in q and ("state" in q or "where" in q or "location" in q):
+        return f"Fraud-approved loss is highest in {top_fraud_state}."
+
+    if "payment" in q:
+        return f"The payment method with the highest fraud-approved loss is {top_fraud_payment}."
+
+    if "loss" in q or "dollar" in q or "revenue" in q:
+        return (
+            f"Total historical loss from approved returns and fraud-approved orders is {format_currency(total_loss)}. "
+            f"Avoided exposure from denied returns and denied fraud is {format_currency(avoided_loss)}."
+        )
+
+    return (
+        "I can summarize actual historical outcomes, approved return loss, fraud-approved loss, avoided exposure, "
+        "top return-loss categories/products, top fraud-loss states/payment methods, and reason-code patterns."
+    )
+
+
 def answer_case_question(question: str, case_row: pd.Series | None) -> str:
     if case_row is None:
         return "No case is selected. Please select an order in Ops Queue first."
@@ -185,6 +288,11 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
     product_category = case_row["product_category"]
     state = case_row["state"]
     country = case_row["country"]
+    return_reason = case_row.get("return_reason_code", "None")
+    return_comment = str(case_row.get("customer_return_comment", "")).strip()
+    fraud_label = case_row.get("fraud_label", "Unknown")
+    fraud_reason = case_row.get("fraud_reason_code", "None")
+    dispute_comment = str(case_row.get("customer_dispute_comment", "")).strip()
 
     if "summary" in q or "summarize" in q or "case" in q:
         return (
@@ -210,15 +318,19 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
         )
 
     if "fraud" in q:
+        comment_text = f" Customer dispute comment: {dispute_comment}" if dispute_comment else ""
         return (
             f"Fraud score for order {order_id} is {fraud_score:.3f}. "
-            f"Payment method is {payment_method}, and the order location is {state}, {country}."
+            f"Payment method is {payment_method}, and the order location is {state}, {country}. "
+            f"Current fraud label is {fraud_label}; reason code is {fraud_reason}.{comment_text}"
         )
 
     if "return" in q:
+        comment_text = f" Customer return comment: {return_comment}" if return_comment else ""
         return (
             f"Return risk score for order {order_id} is {return_score:.3f}. "
-            f"The product is {product_name} in category {product_category}, and the customer has {past_returns} past returns."
+            f"The product is {product_name} in category {product_category}, and the customer has {past_returns} past returns. "
+            f"Return reason code is {return_reason}.{comment_text}"
         )
 
     if "chargeback" in q:

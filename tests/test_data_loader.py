@@ -138,7 +138,8 @@ def test_normalize_shopify_orders_maps_to_required_schema():
         }
     ])
 
-    assert list(df.columns) == REQUIRED_COLUMNS
+    for column in REQUIRED_COLUMNS:
+        assert column in df.columns
     assert df.loc[0, "order_id"] == "#1001"
     assert df.loc[0, "customer_id"] == "456"
     assert df.loc[0, "product_category"] == "Apparel"
@@ -146,6 +147,8 @@ def test_normalize_shopify_orders_maps_to_required_schema():
     assert df.loc[0, "risk_type"] == "None"
     assert df.loc[0, "recommended_action"] == "Allow"
     assert df.loc[0, "latest_action_taken"] == "Order approved"
+    assert df.loc[0, "return_reason_code"] == "None"
+    assert df.loc[0, "fraud_label"] == "Unknown"
 
 
 def test_load_connector_data_finalizes_shopify_payload():

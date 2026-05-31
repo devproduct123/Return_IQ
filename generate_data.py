@@ -9,6 +9,7 @@ np.random.seed(42)
 random.seed(42)
 
 n = 10000
+TARGET_HISTORICAL_ACTUAL_RETURNS = 1599
 
 product_categories = ["Apparel", "Electronics", "Beauty", "Home", "Footwear"]
 products_by_category = {
@@ -24,12 +25,150 @@ countries = ["US", "CA", "UK", "AU"]
 states = ["CA", "NY", "TX", "FL", "WA", "NJ", "IL", "GA"]
 
 CHARGEBACK_REASONS = [
-    "Unauthorized Transaction",
-    "Item Not Received",
-    "Not as Described",
-    "Friendly Fraud",
-    "Duplicate Charge",
+    "Transaction Fraud",
+    "Account Takeover (ATO)",
+    "Chargeback Abuse",
+    "Item Not Received (INR)",
 ]
+
+RETURN_REASON_DETAILS = {
+    "Doesn't Fit Me": (
+        "Customer reported fit or sizing issues",
+        [
+            "Customer said the item did not fit as expected.",
+            "Customer ordered multiple sizes and returned the extras.",
+            "Fit guidance did not match the received item.",
+        ],
+    ),
+    "Not What I Expected": (
+        "Customer expectation did not match the item received",
+        [
+            "Customer said product details were unclear.",
+            "Customer said images did not match the item.",
+            "Customer said the item was different than expected.",
+        ],
+    ),
+    "Changed My Mind": (
+        "Customer no longer needed the item or changed their mind",
+        [
+            "Customer said the item was no longer needed.",
+            "Customer returned after comparing alternatives.",
+            "Customer requested refund without product defect.",
+        ],
+    ),
+    "Product Quality Issues": (
+        "Customer reported product quality or defect issues",
+        [
+            "Customer said product quality missed expectations.",
+            "Item defect reported during return intake.",
+            "Customer reported quality issue after opening the package.",
+        ],
+    ),
+    "Fulfillment Issues": (
+        "Shipping, delivery, or damaged-in-transit issue",
+        [
+            "Customer said delivery arrived after event date.",
+            "Customer no longer needed the item due to shipping delay.",
+            "Package arrived with visible damage.",
+        ],
+    ),
+}
+
+RETURN_SUB_REASONS = {
+    "Doesn't Fit Me": [
+        "Runs Too Small",
+        "Runs Too Large",
+        "Style/Fit Mismatch",
+    ],
+    "Not What I Expected": [
+        "Color Mismatch",
+        "Material Mismatch",
+        "Feature Mismatch",
+        "Quality Expectation Gap",
+    ],
+    "Changed My Mind": [
+        "No Longer Needed",
+        "Accidental Purchase",
+        "Price Regret",
+    ],
+    "Product Quality Issues": [
+        "Damaged On Arrival",
+        "Missing Components",
+        "Performance Failure",
+    ],
+    "Fulfillment Issues": [
+        "Late Delivery",
+        "Wrong Item",
+        "Partial Shipment",
+        "Return to Origin (RTO)",
+    ],
+}
+
+FRAUD_REASON_DETAILS = {
+    "Transaction Fraud": (
+        "Transaction shows payment or authorization fraud indicators",
+        [
+            "Customer stated they did not recognize the transaction.",
+            "Payment behavior matched known fraud patterns.",
+            "High-risk payment signal appeared during review.",
+        ],
+    ),
+    "Account Takeover (ATO)": (
+        "Account behavior suggests unauthorized account access",
+        [
+            "Account behavior changed from historical pattern.",
+            "Verification response did not match account details.",
+            "Login and order behavior suggested account takeover.",
+        ],
+    ),
+    "Chargeback Abuse": (
+        "Dispute pattern suggests post-purchase chargeback abuse",
+        [
+            "Customer disputed after receiving support response.",
+            "Prior similar disputes were found in history.",
+            "Dispute reason changed during review.",
+        ],
+    ),
+    "Item Not Received (INR)": (
+        "Customer disputed delivery receipt",
+        [
+            "Customer claimed package was not received.",
+            "Delivery confirmation conflicts with customer report.",
+            "Customer requested refund after delivery scan.",
+        ],
+    ),
+}
+
+FRAUD_SUB_REASONS = {
+    "Transaction Fraud": [
+        "Unauthorized payment",
+        "High-risk payment signal",
+        "Velocity anomaly",
+        "Address mismatch",
+        "Stolen card pattern",
+    ],
+    "Account Takeover (ATO)": [
+        "Suspicious login",
+        "Account detail changed",
+        "Device mismatch",
+        "Verification mismatch",
+        "Unusual order behavior",
+    ],
+    "Chargeback Abuse": [
+        "Friendly fraud",
+        "Repeat chargeback user",
+        "Post-delivery dispute",
+        "Policy exploitation",
+        "Dispute reason changed",
+    ],
+    "Item Not Received (INR)": [
+        "Delivery confirmation dispute",
+        "Lost package claim",
+        "Porch theft claim",
+        "Carrier scan conflict",
+        "Refund after delivery scan",
+    ],
+}
 
 start_date = datetime(2025, 1, 1)
 data = []
@@ -274,6 +413,103 @@ def derive_outcome_type(
     return "Resolved"
 
 
+def derive_resolution_note(outcome_type: str, risk_type: str) -> str:
+    if outcome_type == "Pending":
+        return "Case is still in progress; final analyst label is not available yet."
+    if outcome_type == "Auto Approved":
+        return "Order had no material risk signals and was auto approved."
+    if risk_type == "Fraud":
+        return "Fraud operations reviewed payment, identity, and dispute signals before resolution."
+    if risk_type == "Returns":
+        return "Returns operations reviewed history, reason code, and inspection requirements before resolution."
+    return "Operations completed the case review."
+
+
+def assign_return_intelligence(
+    risk_type: str,
+    outcome_type: str,
+    category: str,
+    past_returns: int,
+) -> dict:
+    if risk_type != "Returns" and outcome_type not in {"Return Approved", "Return Stopped", "Return Reviewed & Denied", "Return Restricted"}:
+        return {
+            "return_requested": 0,
+            "return_completed": 0,
+            "return_reason_code": "None",
+            "return_sub_reason": "None",
+            "return_reason_text": "",
+            "customer_return_comment": "",
+        }
+
+    if outcome_type == "Pending":
+        requested = 1
+        completed = 0
+    else:
+        requested = 1
+        completed = int(outcome_type == "Return Approved")
+
+    if past_returns >= 3:
+        reason_code = "Changed My Mind"
+    elif category in ["Apparel", "Footwear"]:
+        reason_code = np.random.choice(["Doesn't Fit Me", "Not What I Expected", "Changed My Mind", "Product Quality Issues"], p=[0.48, 0.24, 0.18, 0.10])
+    else:
+        reason_code = np.random.choice(["Fulfillment Issues", "Changed My Mind", "Not What I Expected", "Product Quality Issues"], p=[0.25, 0.35, 0.20, 0.20])
+
+    reason_text, comments = RETURN_REASON_DETAILS[reason_code]
+    sub_reason = str(np.random.choice(RETURN_SUB_REASONS[reason_code]))
+    return {
+        "return_requested": requested,
+        "return_completed": completed,
+        "return_reason_code": reason_code,
+        "return_sub_reason": sub_reason,
+        "return_reason_text": reason_text,
+        "customer_return_comment": str(np.random.choice(comments)),
+    }
+
+
+def assign_fraud_intelligence(
+    risk_type: str,
+    outcome_type: str,
+    chargeback_reason: str,
+    address_mismatch: int,
+) -> dict:
+    if risk_type != "Fraud":
+        return {
+            "fraud_label": "Cleared" if outcome_type == "Auto Approved" else "Unknown",
+            "fraud_reason_code": "None",
+            "fraud_sub_reason": "None",
+            "fraud_reason_text": "",
+            "customer_dispute_comment": "",
+        }
+
+    if outcome_type == "Pending":
+        fraud_label = "Suspected"
+    elif outcome_type == "Verified & Released":
+        fraud_label = "False Positive"
+    else:
+        fraud_label = "Confirmed"
+
+    if chargeback_reason != "None":
+        reason_code = chargeback_reason
+    elif address_mismatch:
+        reason_code = "Account Takeover (ATO)"
+    else:
+        reason_code = np.random.choice(
+            ["Transaction Fraud", "Account Takeover (ATO)", "Chargeback Abuse", "Item Not Received (INR)"],
+            p=[0.38, 0.27, 0.22, 0.13],
+        )
+
+    reason_text, comments = FRAUD_REASON_DETAILS[reason_code]
+    sub_reason = str(np.random.choice(FRAUD_SUB_REASONS[reason_code]))
+    return {
+        "fraud_label": fraud_label,
+        "fraud_reason_code": reason_code,
+        "fraud_sub_reason": sub_reason,
+        "fraud_reason_text": reason_text,
+        "customer_dispute_comment": str(np.random.choice(comments)) if fraud_label != "Suspected" else "",
+    }
+
+
 def derive_case_status(workflow_stage: str) -> str:
     if workflow_stage == "Resolved":
         return "Closed"
@@ -497,6 +733,37 @@ for i in range(n):
         risk_type=risk_type,
         rng_val=outcome_rng,
     )
+    return_intel = assign_return_intelligence(
+        risk_type=risk_type,
+        outcome_type=outcome_type,
+        category=category,
+        past_returns=past_returns,
+    )
+    fraud_intel = assign_fraud_intelligence(
+        risk_type=risk_type,
+        outcome_type=outcome_type,
+        chargeback_reason=chargeback_reason,
+        address_mismatch=address_mismatch,
+    )
+    ops_resolution = "Pending" if outcome_type == "Pending" else outcome_type
+    ops_resolution_note = derive_resolution_note(outcome_type, risk_type)
+    label_source = (
+        "Ops Review" if case_status == "Closed" and risk_type != "None"
+        else "System Auto Label" if case_status == "Closed"
+        else "Model Prediction"
+    )
+    label_confidence = (
+        round(float(np.random.uniform(0.82, 0.98)), 2) if case_status == "Closed"
+        else round(float(np.random.uniform(0.45, 0.72)), 2)
+    )
+    reviewed_by = (
+        np.random.choice(["Fraud Ops", "Returns Ops", "Senior Review", "System"])
+        if case_status == "Closed" else ""
+    )
+    reviewed_at = (
+        (order_date + timedelta(days=int(np.random.randint(1, 14)))).date()
+        if case_status == "Closed" else ""
+    )
 
     data.append(
         {
@@ -536,13 +803,168 @@ for i in range(n):
             "workflow_stage": workflow_stage,
             "latest_action_taken": latest_action_taken,
             "outcome_type": outcome_type,
+            **return_intel,
+            **fraud_intel,
+            "ops_resolution": ops_resolution,
+            "ops_resolution_note": ops_resolution_note,
+            "label_source": label_source,
+            "label_confidence": label_confidence,
+            "reviewed_by": reviewed_by,
+            "reviewed_at": reviewed_at,
         }
     )
 
 df = pd.DataFrame(data)
 
+
+def finalize_historical_dataset(source_df: pd.DataFrame) -> pd.DataFrame:
+    historical = source_df.copy()
+    for idx, row in historical.iterrows():
+        risk_type = str(row["risk_type"])
+        recommended_action = str(row["recommended_action"])
+        outcome_type = str(row["outcome_type"])
+
+        if outcome_type == "Pending":
+            outcome_type = derive_outcome_type(
+                case_status="Closed",
+                recommended_action=recommended_action,
+                risk_type=risk_type,
+                rng_val=float(np.random.random()),
+            )
+
+        return_intel = assign_return_intelligence(
+            risk_type=risk_type,
+            outcome_type=outcome_type,
+            category=str(row["product_category"]),
+            past_returns=int(row["past_returns"]),
+        )
+        fraud_intel = assign_fraud_intelligence(
+            risk_type=risk_type,
+            outcome_type=outcome_type,
+            chargeback_reason=str(row["chargeback_reason"]),
+            address_mismatch=int(row["address_mismatch"]),
+        )
+
+        historical.loc[idx, "case_status"] = "Closed"
+        historical.loc[idx, "workflow_stage"] = "Resolved"
+        historical.loc[idx, "latest_action_taken"] = derive_latest_action_taken(
+            recommended_action,
+            "Closed",
+            "Resolved",
+        )
+        historical.loc[idx, "outcome_type"] = outcome_type
+        for column, value in {**return_intel, **fraud_intel}.items():
+            historical.loc[idx, column] = value
+        historical.loc[idx, "ops_resolution"] = outcome_type
+        historical.loc[idx, "ops_resolution_note"] = derive_resolution_note(outcome_type, risk_type)
+        historical.loc[idx, "label_source"] = "Ops Review" if risk_type != "None" else "System Auto Label"
+        historical.loc[idx, "label_confidence"] = round(float(np.random.uniform(0.82, 0.98)), 2)
+        historical.loc[idx, "reviewed_by"] = (
+            np.random.choice(["Fraud Ops", "Returns Ops", "Senior Review"])
+            if risk_type != "None" else "System"
+        )
+        historical.loc[idx, "reviewed_at"] = (
+            pd.to_datetime(row["order_date"]) + timedelta(days=int(np.random.randint(1, 14)))
+        ).date()
+
+    current_returns = int(historical["return_completed"].astype(int).sum())
+    if current_returns < TARGET_HISTORICAL_ACTUAL_RETURNS:
+        needed = TARGET_HISTORICAL_ACTUAL_RETURNS - current_returns
+        approval_candidates = (
+            historical[
+                (historical["risk_type"].astype(str).eq("Returns"))
+                & (historical["return_completed"].astype(int).eq(0))
+            ]
+            .sort_values(["return_risk_score", "order_value"], ascending=[True, True])
+            .head(needed)
+            .index
+        )
+        historical.loc[approval_candidates, "outcome_type"] = "Return Approved"
+        historical.loc[approval_candidates, "return_requested"] = 1
+        historical.loc[approval_candidates, "return_completed"] = 1
+        historical.loc[approval_candidates, "ops_resolution"] = "Return Approved"
+        historical.loc[approval_candidates, "ops_resolution_note"] = (
+            "Returns operations approved the completed return after review."
+        )
+    elif current_returns > TARGET_HISTORICAL_ACTUAL_RETURNS:
+        excess = current_returns - TARGET_HISTORICAL_ACTUAL_RETURNS
+        denial_candidates = (
+            historical[
+                (historical["risk_type"].astype(str).eq("Returns"))
+                & (historical["return_completed"].astype(int).eq(1))
+            ]
+            .sort_values(["return_risk_score", "order_value"], ascending=[False, False])
+            .head(excess)
+            .index
+        )
+        historical.loc[denial_candidates, "outcome_type"] = "Return Reviewed & Denied"
+        historical.loc[denial_candidates, "return_requested"] = 1
+        historical.loc[denial_candidates, "return_completed"] = 0
+        historical.loc[denial_candidates, "ops_resolution"] = "Return Reviewed & Denied"
+        historical.loc[denial_candidates, "ops_resolution_note"] = (
+            "Returns operations denied the return after review."
+        )
+
+    historical["dataset_mode"] = "Historical"
+    return historical
+
+
+def build_live_dataset(source_df: pd.DataFrame, live_n: int = 2000) -> pd.DataFrame:
+    live = source_df.sample(n=live_n, random_state=2026).copy().reset_index(drop=True)
+    live["order_id"] = [f"L{i + 1:05d}" for i in range(len(live))]
+    live["order_date"] = [
+        (datetime(2026, 1, 1) + timedelta(days=int(day))).date()
+        for day in np.random.randint(0, 31, size=len(live))
+    ]
+
+    for idx, row in live.iterrows():
+        risk_level = str(row["risk_level"])
+        recommended_action = str(row["recommended_action"])
+        risk_type = str(row["risk_type"])
+
+        if risk_level == "Low" or recommended_action == "Allow":
+            case_status = "Open"
+            workflow_stage = "Prediction Only"
+            latest_action = "Predicted allow; awaiting outcome"
+        else:
+            stages = [stage for stage in STAGE_MAP.get(recommended_action, ["Case Created", "Review Queue"]) if stage != "Resolved"]
+            workflow_stage = str(np.random.choice(stages))
+            case_status = derive_case_status(workflow_stage)
+            latest_action = derive_latest_action_taken(recommended_action, case_status, workflow_stage)
+
+        live.loc[idx, "case_status"] = case_status
+        live.loc[idx, "workflow_stage"] = workflow_stage
+        live.loc[idx, "latest_action_taken"] = latest_action
+        live.loc[idx, "outcome_type"] = "Pending"
+        live.loc[idx, "return_requested"] = 0
+        live.loc[idx, "return_completed"] = 0
+        live.loc[idx, "return_reason_code"] = "None"
+        live.loc[idx, "return_sub_reason"] = "None"
+        live.loc[idx, "return_reason_text"] = ""
+        live.loc[idx, "customer_return_comment"] = ""
+        live.loc[idx, "fraud_label"] = "Suspected" if risk_type == "Fraud" else "Unknown"
+        live.loc[idx, "fraud_reason_code"] = "None"
+        live.loc[idx, "fraud_sub_reason"] = "None"
+        live.loc[idx, "fraud_reason_text"] = ""
+        live.loc[idx, "customer_dispute_comment"] = ""
+        live.loc[idx, "ops_resolution"] = "Pending"
+        live.loc[idx, "ops_resolution_note"] = "New January 2026 transaction; actual return/fraud outcome is not known yet."
+        live.loc[idx, "label_source"] = "Model Prediction"
+        live.loc[idx, "label_confidence"] = round(float(np.random.uniform(0.45, 0.72)), 2)
+        live.loc[idx, "reviewed_by"] = ""
+        live.loc[idx, "reviewed_at"] = ""
+
+    live["dataset_mode"] = "Live"
+    return live
+
+
+historical_df = finalize_historical_dataset(df)
+live_df = build_live_dataset(df)
+
 os.makedirs("data", exist_ok=True)
-df.to_csv("data/transactions.csv", index=False)
+historical_df.to_csv("data/transactions.csv", index=False)
+live_df.to_csv("data/live_transactions.csv", index=False)
+df = historical_df
 
 print("\nRisk Level Distribution:")
 print(df["risk_level"].value_counts())
@@ -565,8 +987,23 @@ print(df["workflow_stage"].value_counts())
 print("\nOutcome Type Distribution:")
 print(df["outcome_type"].value_counts())
 
+print("\nReturn Reason Distribution:")
+print(df["return_reason_code"].value_counts())
+
+print("\nFraud Label Distribution:")
+print(df["fraud_label"].value_counts())
+
 print("\nDevice Risk Distribution:")
 print(df["device_risk"].value_counts())
 
-print("\nDataset created: data/transactions.csv")
+print("\nHistorical Date Range:")
+print(f'{historical_df["order_date"].min()} to {historical_df["order_date"].max()}')
+
+print("\nLive Date Range:")
+print(f'{live_df["order_date"].min()} to {live_df["order_date"].max()}')
+
+print("\nLive Case Status Distribution:")
+print(live_df["case_status"].value_counts())
+
+print("\nDatasets created: data/transactions.csv and data/live_transactions.csv")
 print(df.head())

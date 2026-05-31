@@ -17,6 +17,7 @@ REQUIRED_COLUMNS = [
     "workflow_stage", "latest_action_taken"
 ]
 SHOPIFY_CACHE_PATH = "data/shopify_transactions.csv"
+LIVE_TRANSACTIONS_PATH = "data/live_transactions.csv"
 
 
 def derive_latest_action_taken(
@@ -93,6 +94,24 @@ def _finalize_loaded_data(df: pd.DataFrame) -> pd.DataFrame:
         "chargebacks_won": 0,
         "action_reason": "",
         "outcome_type": "Pending",
+        "return_requested": 0,
+        "return_completed": 0,
+        "return_reason_code": "None",
+        "return_sub_reason": "None",
+        "return_reason_text": "",
+        "customer_return_comment": "",
+        "fraud_label": "Unknown",
+        "fraud_reason_code": "None",
+        "fraud_sub_reason": "None",
+        "fraud_reason_text": "",
+        "customer_dispute_comment": "",
+        "ops_resolution": "Pending",
+        "ops_resolution_note": "",
+        "label_source": "System",
+        "label_confidence": 0.0,
+        "reviewed_by": "",
+        "reviewed_at": "",
+        "dataset_mode": "",
         "ops_action_taken": "",
         "ops_action_by": "",
         "ops_action_at": "",
@@ -219,9 +238,27 @@ def normalize_shopify_orders(raw_orders: list[dict[str, Any]]) -> pd.DataFrame:
                 case_status,
                 workflow_stage,
             ),
+            "return_requested": int(refunded),
+            "return_completed": int(refunded),
+            "return_reason_code": "Shopify Refund" if refunded else "None",
+            "return_sub_reason": "Refund Created" if refunded else "None",
+            "return_reason_text": "Refund present in Shopify order payload" if refunded else "",
+            "customer_return_comment": "",
+            "fraud_label": "Suspected" if cancelled else "Unknown",
+            "fraud_reason_code": "Shopify Cancellation" if cancelled else "None",
+            "fraud_sub_reason": "Cancellation Signal" if cancelled else "None",
+            "fraud_reason_text": "Cancellation signal present in Shopify order payload" if cancelled else "",
+            "customer_dispute_comment": "",
+            "ops_resolution": "Pending" if cancelled or refunded else "Auto Approved",
+            "ops_resolution_note": "",
+            "label_source": "Shopify Sync",
+            "label_confidence": 0.55 if cancelled or refunded else 0.25,
+            "reviewed_by": "",
+            "reviewed_at": "",
+            "dataset_mode": "Live",
         })
 
-    return pd.DataFrame(rows, columns=REQUIRED_COLUMNS)
+    return pd.DataFrame(rows)
 
 
 def load_connector_data(connector: CommerceConnector, limit: int = 100) -> pd.DataFrame:

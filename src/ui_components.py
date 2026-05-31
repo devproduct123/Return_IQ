@@ -1,9 +1,12 @@
 import html as _html
+import re
 
 import pandas as pd
 import streamlit as st
 
 from src.metrics import format_currency
+
+DEMO_CONTACT_EMAIL = "dg@aignita.com"
 
 
 # ── Badge helpers ───────────────────────────────────────────────────────────────
@@ -31,7 +34,6 @@ def render_page_header():
 <div class="riq-page-header">
   <div style="display:flex;align-items:baseline;gap:0.5rem;">
     <span style="font-size:1.3rem;font-weight:700;color:#1d4ed8;letter-spacing:-0.02em;">Aignita RiskIQ</span>
-    <span class="badge badge-neutral" style="font-size:0.62rem;padding:1px 6px;">DEMO</span>
   </div>
   <div style="font-size:0.8rem;color:#64748b;margin-top:2px;">
     AI-powered fraud, return risk, and risk operations intelligence for e-commerce merchants
@@ -41,9 +43,9 @@ def render_page_header():
 
 
 def render_demo_banner():
-    st.markdown("""
+    st.markdown(f"""
 <div class="riq-demo-banner">
-  <b>Want to explore RiskIQ for your store?</b> Contact <b>dg@aignita.com</b> to discuss a pilot.
+  <b>Want to explore RiskIQ for your store?</b> Contact <b>{_html.escape(DEMO_CONTACT_EMAIL)}</b> to discuss a pilot.
 </div>
 """, unsafe_allow_html=True)
 
@@ -349,14 +351,39 @@ def render_verification_templates(order_id: str = "{order_id}", customer_id: str
 
 # ── AI output components ────────────────────────────────────────────────────────
 
+def _md_to_html(text: str) -> str:
+    """Convert basic markdown (bold, italic, bullets) to HTML after escaping."""
+    text = _html.escape(str(text))
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'\*([^*\n]+?)\*', r'<em>\1</em>', text)
+    lines = text.split('\n')
+    out_lines: list[str] = []
+    in_list = False
+    for line in lines:
+        if re.match(r'^[-•] ', line):
+            if not in_list:
+                out_lines.append('<ul style="margin:0.35rem 0 0.35rem 1.1rem;padding:0;">')
+                in_list = True
+            out_lines.append(f'<li style="margin:0.1rem 0;">{line[2:]}</li>')
+        else:
+            if in_list:
+                out_lines.append('</ul>')
+                in_list = False
+            out_lines.append(line)
+    if in_list:
+        out_lines.append('</ul>')
+    text = '\n'.join(out_lines)
+    text = text.replace('\n\n', '<br><br>')
+    text = text.replace('\n', '<br>')
+    return text
+
+
 def render_ai_answer(text: str):
-    escaped = _html.escape(str(text))
-    st.markdown(f'<div class="riq-answer">{escaped}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="riq-answer">{_md_to_html(text)}</div>', unsafe_allow_html=True)
 
 
 def render_ai_output(text: str):
-    escaped = _html.escape(str(text))
-    st.markdown(f'<div class="riq-output">{escaped}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="riq-output">{_md_to_html(text)}</div>', unsafe_allow_html=True)
 
 
 # ── Footer ──────────────────────────────────────────────────────────────────────
@@ -375,3 +402,4 @@ def render_insight_footer(metrics: dict, top_category: str, top_state: str):
 """
 
     st.info(insight_text)
+    st.markdown("Pilot with Aignita to validate these signals against live merchant outcomes.")
