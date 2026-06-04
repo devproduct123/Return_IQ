@@ -18,6 +18,7 @@ REQUIRED_COLUMNS = [
 ]
 SHOPIFY_CACHE_PATH = "data/shopify_transactions.csv"
 LIVE_TRANSACTIONS_PATH = "data/live_transactions.csv"
+LIVE_DEMO_BASELINE_PATH = "data/live_transactions_demo_baseline.csv"
 
 
 def derive_latest_action_taken(
@@ -117,6 +118,9 @@ def _finalize_loaded_data(df: pd.DataFrame) -> pd.DataFrame:
         "ops_action_at": "",
         "ops_action_note": "",
         "ops_action_history": "",
+        "ops_override_reason": "",
+        "analyst_confidence": 0.0,
+        "ops_resolution_reason": "",
     }
     for col, default in _optional_defaults.items():
         if col not in df.columns:
@@ -157,7 +161,7 @@ def _address_value(order: dict[str, Any], key: str, default: str = "Unknown") ->
 
 
 def normalize_shopify_orders(raw_orders: list[dict[str, Any]]) -> pd.DataFrame:
-    """Map Shopify order payloads into the RiskIQ dashboard schema."""
+    """Map Shopify order payloads into the Risk Intelligence dashboard schema."""
 
     rows = []
     for order in raw_orders:

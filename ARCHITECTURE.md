@@ -1,13 +1,13 @@
-# Aignita RiskIQ Architecture
+# Aignita Risk Intelligence Architecture
 
-This document describes the current architecture of the Aignita RiskIQ Streamlit app after the initial modularization work. The goal is to make the project easier to extend without overstating its current production readiness.
+This document describes the current architecture of the Aignita Risk Intelligence Streamlit app after the initial modularization work. The goal is to make the project easier to extend without overstating its current production readiness.
 
 ## High-Level Architecture
 
-RiskIQ is currently a single Streamlit application with extracted helper modules for data loading, metrics, risk logic, and reusable UI rendering.
+Risk Intelligence is currently a single Streamlit application with extracted helper modules for data loading, metrics, risk logic, and reusable UI rendering.
 
 ```text
-data/transactions.csv
+data/transactions.csv + data/live_transactions.csv
         |
         v
 src/data_loader.py
@@ -20,7 +20,7 @@ app.py  ----> src/metrics.py
   +---- optional Groq API call for AI Copilot
   |
   v
-Streamlit dashboard, Ops Queue, case review, Copilot output
+Streamlit dashboard, Review Queue, case review, Copilot output
 ```
 
 The app uses pandas for data manipulation, Plotly for charts, Streamlit for UI, and Groq for optional LLM responses.
@@ -30,9 +30,9 @@ The app uses pandas for data manipulation, Plotly for charts, Streamlit for UI, 
 1. `app.py` configures Streamlit and loads environment variables.
 2. `app.py` initializes the Groq client if `GROQ_API_KEY` is available.
 3. `app.py` calls the cached Streamlit wrapper around `src.data_loader.load_data`.
-4. Sidebar filters are applied to the loaded dataframe.
+4. Historical Intelligence or Live Risk Queue mode is applied, followed by sidebar filters.
 5. `src.metrics.compute_summary_metrics` calculates headline metrics.
-6. `app.py` renders tabs, charts, tables, downloads, and selected-case flows.
+6. `app.py` renders historical outcome analysis, live operations views, model-learning feedback, downloads, and selected-case flows.
 7. `src.risk_logic` provides priority sorting, timeline steps, and Quick Insights.
 8. `src.ui_components` renders stable reusable UI blocks.
 9. AI Copilot calls are assembled and executed in `app.py`.
@@ -51,7 +51,10 @@ It owns:
 - Groq client initialization.
 - Streamlit cache wrapper for data loading.
 - Sidebar filters.
+- Historical/live work-mode selection.
 - Tab structure and chart/table layout.
+- Structured operations resolution and override capture.
+- Resettable live demo snapshot.
 - `st.session_state` behavior.
 - Demo event tracking.
 - LLM prompt orchestration and Groq API calls.
@@ -97,7 +100,7 @@ Responsibilities:
 - `answer_risk_question`
 - `answer_case_question`
 
-This module powers Ops Queue ordering, selected-case timeline steps, and Quick Insights answers.
+This module powers Review Queue ordering, selected-case timeline steps, and Quick Insights answers.
 
 ### `src/ui_components.py`
 
@@ -123,6 +126,7 @@ Responsibilities:
 - Assign synthetic fraud and return-abuse scores.
 - Assign risk levels, recommended actions, workflow stages, and case statuses.
 - Write `data/transactions.csv`.
+- Write historical, live, and resettable live-baseline CSV files.
 
 The generated data is useful for demos and tests, but it is not a validated production risk model.
 
@@ -148,7 +152,7 @@ The app supports LLM-assisted workflows through Groq when `GROQ_API_KEY` is conf
 
 ### Case Copilot
 
-1. User selects an order in Ops Queue.
+1. User selects an order in Review Queue.
 2. User asks a case-level question.
 3. `app.py` builds selected-case context.
 4. In AI Analyst mode, Groq receives the case context and question.
@@ -211,7 +215,7 @@ Before production use, the app needs explicit data classification, access contro
 - No production database.
 - No case persistence across sessions.
 - No real merchant integration.
-- No model evaluation workflow.
+- Model-learning capture is demo-oriented rather than a production model evaluation workflow.
 - No fraud/return policy configuration UI.
 - No user or team management.
 - No durable event pipeline.

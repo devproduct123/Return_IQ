@@ -1,12 +1,12 @@
-# Aignita RiskIQ
+# Aignita Risk Intelligence
 
-Aignita RiskIQ is a Streamlit demo application for AI-assisted e-commerce risk operations. It combines fraud risk, return-abuse risk, operational case workflow, dashboard metrics, CSV exports, and an LLM-powered copilot experience for merchant and analyst workflows.
+Aignita Risk Intelligence is a Streamlit demo application for AI-assisted e-commerce risk operations. It combines fraud risk, return-abuse risk, operational case workflow, dashboard metrics, CSV exports, and an LLM-powered copilot experience for merchant and analyst workflows.
 
 The current app is a product foundation and demo, not a fully production-ready risk platform. It uses simulated transaction data and local Streamlit session state to demonstrate the core experience.
 
 ## Product Purpose
 
-RiskIQ is designed to help e-commerce merchants and risk teams:
+Risk Intelligence is designed to help e-commerce merchants and risk teams:
 
 - Monitor fraud and return-abuse exposure across orders.
 - Identify high-priority cases for operational review.
@@ -14,17 +14,20 @@ RiskIQ is designed to help e-commerce merchants and risk teams:
 - Generate analyst-facing and merchant-facing risk summaries.
 - Explore risk drivers through a dashboard and quick insight prompts.
 
-The app focuses on a practical risk operations workflow: dashboard summary, risk drilldowns, action recommendations, an Ops Queue, selected-case review, and an AI Copilot.
+The app focuses on a closed-loop workflow: historical outcome analysis, live risk prioritization, selected-case review, structured operations feedback, model-learning backlog capture, and an AI Copilot.
 
 ## Current Features
 
-- Executive overview metrics and charts.
-- FraudIQ and ReturnIQ drilldown tabs.
-- Action Center for workflow and resolution summaries.
-- Ops Queue for open high-risk cases.
-- Selected-case detail view with case timeline.
+- Historical Intelligence mode with actual return and fraud outcomes.
+- Return and fraud driver charts with Level 2 taxonomy drilldowns.
+- Live Risk Queue mode with predicted exposure and prioritized cases.
+- Review Queue with selected-case details, timeline, structured actions, final labels, override reasons, and analyst confidence.
+- Historical Model Learning view for analytics guidance and future training signals.
+- Live Review Queue feedback capture for case-level model improvement.
 - Quick Insights mode for deterministic, rule-based answers.
 - AI Copilot mode using Groq when `GROQ_API_KEY` is configured.
+- Demo reset button and seeded live feedback examples for repeatable presentations.
+- Optional Shopify API and saved-sync integration modes under advanced data options.
 - CSV downloads for open cases and filtered datasets.
 - Demo event tracking stored in Streamlit session state.
 
@@ -36,7 +39,9 @@ The app focuses on a practical risk operations workflow: dashboard summary, risk
 ├── generate_data.py
 ├── requirements.txt
 ├── data/
-│   └── transactions.csv
+│   ├── transactions.csv
+│   ├── live_transactions.csv
+│   └── live_transactions_demo_baseline.csv
 ├── src/
 │   ├── __init__.py
 │   ├── data_loader.py
@@ -90,7 +95,13 @@ Without `GROQ_API_KEY`, the app still works with Quick Insights, but AI Copilot 
 
 ## Data
 
-The app reads `data/transactions.csv`. If the file is missing, regenerate demo data:
+The app reads:
+
+- `data/transactions.csv`: completed historical outcomes from `2025-01-01` to `2025-12-31`.
+- `data/live_transactions.csv`: January 2026 live-risk snapshot with mostly pending outcomes and a small set of seeded operations feedback examples.
+- `data/live_transactions_demo_baseline.csv`: resettable copy of the live demo snapshot.
+
+If the files are missing or need to be refreshed, regenerate demo data:
 
 ```bash
 python3 generate_data.py
@@ -98,9 +109,21 @@ python3 generate_data.py
 
 The dataset is simulated and should not be treated as a trained model output, production fraud data, or evidence of real-world risk performance.
 
+Use **Reset Demo State** in the sidebar to restore the seeded live snapshot and clear local model-learning backlog entries after a presentation.
+
+## Suggested Demo Flow
+
+1. Open **Historical Intelligence** and show realized loss.
+2. Drill into return and fraud Level 1 and Level 2 drivers.
+3. Add one historical analytics insight to the Model Learning backlog.
+4. Switch to **Live Risk Queue** and open a high-priority case.
+5. Record an operations action, final learning label, reason, case insight, and analyst confidence.
+6. Open **Model feedback from reviewed cases** in the Review Queue to show the reviewed case entering the feedback queue.
+7. Finish in **Risk Copilot** with deterministic Quick Insights or the optional AI Copilot.
+
 ## AI Copilot Flow
 
-RiskIQ has two answer modes:
+Risk Intelligence has two answer modes:
 
 - Quick Insights: deterministic pandas-based responses from `src/risk_logic.py`.
 - AI Copilot / AI Analyst: prompt-and-context responses through Groq.

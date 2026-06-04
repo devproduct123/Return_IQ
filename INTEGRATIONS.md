@@ -1,16 +1,16 @@
-# RiskIQ Integrations
+# Risk Intelligence Integrations
 
-RiskIQ now has a small integrations layer for loading merchant data from external APIs while keeping the existing demo CSV flow.
+Risk Intelligence now has a small integrations layer for loading merchant data from external APIs while keeping the existing demo CSV flow.
 
 ## Current Data Sources
 
-The Streamlit sidebar has a **Data Source** selector:
+The Streamlit sidebar has an **Advanced data options** expander with a data-source selector:
 
 - `Demo CSV`: loads `data/transactions.csv`.
-- `Shopify API`: fetches recent Shopify orders and normalizes them into the RiskIQ schema.
+- `Shopify API`: fetches recent Shopify orders and normalizes them into the Risk Intelligence schema.
 - `Saved Shopify CSV`: loads the last saved Shopify sync from `data/shopify_transactions.csv`.
 
-`Demo CSV` remains the default so the app is safe for demos and local development.
+`Demo CSV` remains the default so the live merchant integration choices stay out of the way during a presentation.
 
 When using `Shopify API`, the sidebar includes **Save Shopify Sync to CSV**. This writes
 the normalized dataframe to:

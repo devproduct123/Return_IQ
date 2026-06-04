@@ -1,6 +1,6 @@
 # app.py Code Walkthrough
 
-This document explains the current `app.py` file section by section. The app is a Streamlit dashboard for Aignita RiskIQ, an AI-assisted e-commerce fraud, return-abuse, and risk-operations demo.
+This document explains the current `app.py` file section by section. The app is a Streamlit dashboard for Aignita Risk Intelligence, an AI-assisted e-commerce fraud, return-abuse, and risk-operations demo.
 
 At a high level, `app.py` does five jobs:
 
@@ -38,7 +38,7 @@ Finally, it imports local project helpers:
 ## Streamlit Page Setup
 
 ```python
-st.set_page_config(page_title="Aignita RiskIQ", layout="wide")
+st.set_page_config(page_title="Aignita Risk Intelligence", layout="wide")
 ```
 
 This configures the browser tab title and tells Streamlit to use a wide dashboard layout. The wide layout is important because the app uses multi-column metric rows, charts, and large dataframes.

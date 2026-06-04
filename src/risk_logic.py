@@ -265,7 +265,7 @@ def answer_historical_question(question: str, data: pd.DataFrame) -> str:
 
 def answer_case_question(question: str, case_row: pd.Series | None) -> str:
     if case_row is None:
-        return "No case is selected. Please select an order in Ops Queue first."
+        return "No case is selected. Please select an order in Review Queue first."
 
     q = question.lower().strip()
 

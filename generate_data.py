@@ -1,4 +1,5 @@
 import os
+import json
 import random
 from datetime import datetime, timedelta
 
@@ -953,17 +954,106 @@ def build_live_dataset(source_df: pd.DataFrame, live_n: int = 2000) -> pd.DataFr
         live.loc[idx, "label_confidence"] = round(float(np.random.uniform(0.45, 0.72)), 2)
         live.loc[idx, "reviewed_by"] = ""
         live.loc[idx, "reviewed_at"] = ""
+        live.loc[idx, "ops_action_taken"] = ""
+        live.loc[idx, "ops_action_by"] = ""
+        live.loc[idx, "ops_action_at"] = ""
+        live.loc[idx, "ops_action_note"] = ""
+        live.loc[idx, "ops_action_history"] = ""
+        live.loc[idx, "ops_override_reason"] = ""
+        live.loc[idx, "analyst_confidence"] = 0.0
+        live.loc[idx, "ops_resolution_reason"] = ""
 
     live["dataset_mode"] = "Live"
     return live
 
 
+def seed_live_demo_feedback(live: pd.DataFrame) -> pd.DataFrame:
+    seeded = live.copy()
+    fraud_indexes = seeded[
+        seeded["risk_type"].astype(str).eq("Fraud")
+        & seeded["risk_level"].astype(str).eq("High")
+    ].head(5).index.tolist()
+    return_indexes = seeded[
+        seeded["risk_type"].astype(str).eq("Returns")
+        & seeded["risk_level"].astype(str).eq("High")
+    ].head(5).index.tolist()
+    allow_indexes = seeded[
+        seeded["recommended_action"].astype(str).eq("Allow")
+    ].head(2).index.tolist()
+
+    specs = [
+        *zip(fraud_indexes, [
+            ("Fraud Confirmed", "Fraud Confirmed & Blocked", "Transaction Fraud", "Fraud Ops", "", 0.96),
+            ("Fraud Confirmed", "Fraud Confirmed & Blocked", "Account Takeover (ATO)", "Fraud Ops", "", 0.93),
+            ("Fraud Confirmed", "Chargeback Prevented", "Chargeback Abuse", "Senior Review", "", 0.91),
+            ("Fraud False Positive", "Verified & Released", "Transaction Fraud", "Fraud Ops", "Trusted repeat customer passed identity verification.", 0.90),
+            ("Fraud False Positive", "Verified & Released", "Account Takeover (ATO)", "Senior Review", "Device change was legitimate after customer verification.", 0.88),
+        ]),
+        *zip(return_indexes, [
+            ("Return Approved", "Return Approved", "Doesn't Fit Me", "Returns Ops", "", 0.94),
+            ("Return Approved", "Return Approved", "Product Quality Issues", "Returns Ops", "", 0.92),
+            ("Return Denied", "Return Reviewed & Denied", "Changed My Mind", "Returns Ops", "Repeat return behavior supported a stricter refund decision.", 0.91),
+            ("Return Denied", "Return Stopped", "Not What I Expected", "Senior Review", "Item history and inspection result did not support the requested refund.", 0.89),
+            ("Return Denied", "Return Stopped", "Fulfillment Issues", "Returns Ops", "Carrier scan and fulfillment record contradicted the claim.", 0.87),
+        ]),
+        *zip(allow_indexes, [
+            ("Order Approved", "Approved", "Standard approval", "Risk Ops", "Manual review confirmed a trusted customer profile.", 0.95),
+            ("Order Approved", "Approved", "Standard approval", "Risk Ops", "", 0.93),
+        ]),
+    ]
+
+    for idx, (resolution, outcome_type, reason, reviewer, override_reason, confidence) in specs:
+        reviewed_at = "2026-02-01T16:00:00+00:00"
+        action = "Approve Order" if resolution in {"Fraud False Positive", "Order Approved", "Return Approved"} else "Close Case"
+        note = f"Seeded demo review: {resolution}."
+        seeded.loc[idx, "case_status"] = "Closed"
+        seeded.loc[idx, "workflow_stage"] = "Resolved"
+        seeded.loc[idx, "latest_action_taken"] = note
+        seeded.loc[idx, "outcome_type"] = outcome_type
+        seeded.loc[idx, "ops_resolution"] = resolution
+        seeded.loc[idx, "ops_resolution_reason"] = reason
+        seeded.loc[idx, "ops_resolution_note"] = note
+        seeded.loc[idx, "label_source"] = "Ops Review"
+        seeded.loc[idx, "label_confidence"] = confidence
+        seeded.loc[idx, "analyst_confidence"] = confidence
+        seeded.loc[idx, "reviewed_by"] = reviewer
+        seeded.loc[idx, "reviewed_at"] = reviewed_at
+        seeded.loc[idx, "ops_action_taken"] = action
+        seeded.loc[idx, "ops_action_by"] = reviewer
+        seeded.loc[idx, "ops_action_at"] = reviewed_at
+        seeded.loc[idx, "ops_action_note"] = note
+        seeded.loc[idx, "ops_override_reason"] = override_reason
+        seeded.loc[idx, "ops_action_history"] = json.dumps([{
+            "ts": reviewed_at,
+            "action": action,
+            "actor": reviewer,
+            "note": note,
+            "case_status": "Closed",
+            "workflow_stage": "Resolved",
+            "latest_action_taken": note,
+        }])
+
+        risk_type = str(seeded.loc[idx, "risk_type"])
+        if risk_type == "Fraud":
+            seeded.loc[idx, "fraud_label"] = "False Positive" if resolution == "Fraud False Positive" else "Confirmed"
+            seeded.loc[idx, "fraud_reason_code"] = reason
+            seeded.loc[idx, "fraud_sub_reason"] = str(np.random.choice(FRAUD_SUB_REASONS[reason]))
+        elif risk_type == "Returns":
+            seeded.loc[idx, "return_requested"] = 1
+            seeded.loc[idx, "return_completed"] = int(resolution == "Return Approved")
+            seeded.loc[idx, "return_reason_code"] = reason
+            seeded.loc[idx, "return_sub_reason"] = str(np.random.choice(RETURN_SUB_REASONS[reason]))
+
+    return seeded
+
+
 historical_df = finalize_historical_dataset(df)
-live_df = build_live_dataset(df)
+live_df = seed_live_demo_feedback(build_live_dataset(df))
 
 os.makedirs("data", exist_ok=True)
 historical_df.to_csv("data/transactions.csv", index=False)
 live_df.to_csv("data/live_transactions.csv", index=False)
+live_df.to_csv("data/live_transactions_demo_baseline.csv", index=False)
 df = historical_df
 
 print("\nRisk Level Distribution:")

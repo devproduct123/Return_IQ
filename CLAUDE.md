@@ -29,7 +29,7 @@ Copy `.env` and set `GROQ_API_KEY` for LLM features. Without it, the app falls b
 
 ## Architecture
 
-**Entry point:** `app.py` (~1,500 lines) — Streamlit orchestration, sidebar filters, session state, chart/table rendering, LLM calls, and all tab layout (Overview, FraudIQ, ReturnIQ, Action Center, Ops Queue, AI Copilot).
+**Entry point:** `app.py` — Streamlit orchestration, historical/live work modes, sidebar filters, session state, chart/table rendering, structured operations feedback, model-learning views, and LLM calls.
 
 **Supporting modules in `src/`:**
 

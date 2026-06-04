@@ -1,2 +1,2 @@
-"""External data integrations for Aignita RiskIQ."""
+"""External data integrations for Aignita Risk Intelligence."""
 

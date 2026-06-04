@@ -33,7 +33,7 @@ def render_page_header():
     st.markdown("""
 <div class="riq-page-header">
   <div style="display:flex;align-items:baseline;gap:0.5rem;">
-    <span style="font-size:1.3rem;font-weight:700;color:#1d4ed8;letter-spacing:-0.02em;">Aignita RiskIQ</span>
+    <span style="font-size:1.3rem;font-weight:700;color:#1d4ed8;letter-spacing:-0.02em;">Aignita Risk Intelligence</span>
   </div>
   <div style="font-size:0.8rem;color:#64748b;margin-top:2px;">
     AI-powered fraud, return risk, and risk operations intelligence for e-commerce merchants
@@ -45,7 +45,7 @@ def render_page_header():
 def render_demo_banner():
     st.markdown(f"""
 <div class="riq-demo-banner">
-  <b>Want to explore RiskIQ for your store?</b> Contact <b>{_html.escape(DEMO_CONTACT_EMAIL)}</b> to discuss a pilot.
+  <b>Want to explore Risk Intelligence for your store?</b> Contact <b>{_html.escape(DEMO_CONTACT_EMAIL)}</b> to discuss a pilot.
 </div>
 """, unsafe_allow_html=True)
 

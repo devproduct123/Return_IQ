@@ -5,3 +5,4 @@ venv/
 .env
 .streamlit/secrets.toml
 data/shopify_transactions.csv
+data/model_learning_backlog.json

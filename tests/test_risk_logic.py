@@ -134,7 +134,7 @@ def test_answer_case_question_why_and_none_case():
         "Primary reason: high-value order"
     )
     assert answer_case_question("summary", None) == (
-        "No case is selected. Please select an order in Ops Queue first."
+        "No case is selected. Please select an order in Review Queue first."
     )
 
 
