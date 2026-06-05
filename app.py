@@ -322,7 +322,7 @@ PRIORITY_COLORS = {"High": "#dc2626", "Moderate": "#d97706", "Low": "#16a34a"}
 RISK_TYPE_COLORS = {"Fraud Risk": "#2563eb", "Return Risk": "#d97706"}
 DEMO_MERCHANT_NAME = "Meridian Commerce"
 DEMO_PLATFORM = "Shopify"
-DEMO_LAST_SYNC = "Demo Snapshot: January 2026"
+DEMO_LAST_SYNC = "January 2026 Snapshot"
 WORK_MODE_OPTIONS = ["Live Risk Queue", "Historical Intelligence"]
 
 def style_chart(
@@ -1119,6 +1119,7 @@ def render_historical_intelligence_view(data: pd.DataFrame):
     di3.metric("Fraud Approved $", format_currency(float(impact_lookup.get("Fraud Approved", 0))))
     di4.metric("Fraud Denied $", format_currency(float(impact_lookup.get("Fraud Denied", 0))))
 
+    st.markdown("### Level 1 Driver Charts")
     render_reason_outcome_chart(
         st,
         historical_df,
@@ -1395,7 +1396,6 @@ def log_event(event_name: str, details: dict | None = None):
     }
 
     st.session_state.setdefault("event_log", []).append(event)
-    print(json.dumps(event))
 
 
 def log_once(key: str, event_name: str, details: dict | None = None):
@@ -1868,7 +1868,7 @@ Task:
 
 # ── Data load ────────────────────────────────────────────────────────────────────
 
-st.sidebar.markdown("### Demo Data")
+st.sidebar.markdown("### Data Source")
 with st.sidebar.expander("Advanced data options", expanded=False):
     data_source_label = st.selectbox(
         "Choose where Risk Intelligence loads merchant data from",
