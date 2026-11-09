@@ -10,8 +10,8 @@ from src.integrations.shopify import ShopifyConnector
 REQUIRED_COLUMNS = [
     "order_id", "customer_id", "order_date", "product_category", "product_name",
     "payment_method", "country", "state", "order_value", "past_orders",
-    "past_returns", "chargeback_history", "discount_used", "expedited_shipping",
-    "fraud_score", "return_risk_score", "unified_risk_score", "risk_level",
+    "past_returns", "discount_used", "expedited_shipping",
+    "return_risk_score", "unified_risk_score", "risk_level",
     "risk_type", "recommended_action", "ai_agent_next_step", "action_owner",
     "automation_level", "risk_reason_summary", "priority_tier", "case_status",
     "workflow_stage", "latest_action_taken"
@@ -35,10 +35,6 @@ def derive_latest_action_taken(
         return "Case created"
     if workflow_stage == "Review Queue":
         return "Soft review queued"
-    if workflow_stage == "Verification Sent":
-        return "Customer verification sent"
-    if workflow_stage == "Awaiting Customer Response":
-        return "Awaiting customer response"
     if workflow_stage == "Awaiting Item Inspection":
         return "Awaiting item inspection"
     if workflow_stage == "High Returner Tagged":
@@ -48,8 +44,6 @@ def derive_latest_action_taken(
     if workflow_stage == "Watchlist Monitoring":
         return "Case under watchlist monitoring"
 
-    if recommended_action == "Hold Fulfillment":
-        return "Fulfillment held"
     if recommended_action == "Restrict Return / Refund":
         return "Return/refund restricted"
     if recommended_action == "Soft Review":
@@ -87,12 +81,7 @@ def _finalize_loaded_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # Fill optional enriched columns with safe defaults when absent (e.g. Shopify source)
     _optional_defaults = {
-        "device_risk": "Known Device",
-        "velocity_flag": 0,
         "customer_lifetime_days": 0,
-        "address_mismatch": 0,
-        "chargeback_reason": "None",
-        "chargebacks_won": 0,
         "action_reason": "",
         "outcome_type": "Pending",
         "return_requested": 0,
@@ -101,11 +90,6 @@ def _finalize_loaded_data(df: pd.DataFrame) -> pd.DataFrame:
         "return_sub_reason": "None",
         "return_reason_text": "",
         "customer_return_comment": "",
-        "fraud_label": "Unknown",
-        "fraud_reason_code": "None",
-        "fraud_sub_reason": "None",
-        "fraud_reason_text": "",
-        "customer_dispute_comment": "",
         "ops_resolution": "Pending",
         "ops_resolution_note": "",
         "label_source": "System",
@@ -161,7 +145,7 @@ def _address_value(order: dict[str, Any], key: str, default: str = "Unknown") ->
 
 
 def normalize_shopify_orders(raw_orders: list[dict[str, Any]]) -> pd.DataFrame:
-    """Map Shopify order payloads into the Risk Intelligence dashboard schema."""
+    """Map Shopify order payloads into the Return Risk Intelligence dashboard schema."""
 
     rows = []
     for order in raw_orders:
@@ -169,24 +153,11 @@ def normalize_shopify_orders(raw_orders: list[dict[str, Any]]) -> pd.DataFrame:
         customer = order.get("customer") or {}
         order_value = float(order.get("total_price") or 0.0)
         refunded = bool(order.get("refunds"))
-        cancelled = bool(order.get("cancelled_at"))
         expedited = "express" in str(order.get("shipping_lines", "")).lower()
-        fraud_score = 0.35 if cancelled else 0.08
-        return_risk_score = 0.32 if refunded else 0.10
-        unified_risk_score = max(fraud_score, return_risk_score)
+        return_risk_score = 0.42 if refunded else 0.10
+        unified_risk_score = return_risk_score
 
-        if cancelled:
-            risk_level = "High"
-            risk_type = "Fraud"
-            recommended_action = "Soft Review"
-            ai_next_step = "Review cancellation, payment, and fulfillment signals before approving future orders."
-            action_owner = "Fraud Ops"
-            automation_level = "Assisted"
-            risk_reason = "Shopify order has cancellation signal"
-            priority_tier = "Moderate"
-            case_status = "Open"
-            workflow_stage = "Review Queue"
-        elif refunded:
+        if refunded:
             risk_level = "High"
             risk_type = "Returns"
             recommended_action = "Soft Review"
@@ -221,10 +192,8 @@ def normalize_shopify_orders(raw_orders: list[dict[str, Any]]) -> pd.DataFrame:
             "order_value": order_value,
             "past_orders": 1,
             "past_returns": 1 if refunded else 0,
-            "chargeback_history": 0,
             "discount_used": 1 if order.get("discount_codes") else 0,
             "expedited_shipping": int(expedited),
-            "fraud_score": round(fraud_score, 3),
             "return_risk_score": round(return_risk_score, 3),
             "unified_risk_score": round(unified_risk_score, 3),
             "risk_level": risk_level,
@@ -248,15 +217,10 @@ def normalize_shopify_orders(raw_orders: list[dict[str, Any]]) -> pd.DataFrame:
             "return_sub_reason": "Refund Created" if refunded else "None",
             "return_reason_text": "Refund present in Shopify order payload" if refunded else "",
             "customer_return_comment": "",
-            "fraud_label": "Suspected" if cancelled else "Unknown",
-            "fraud_reason_code": "Shopify Cancellation" if cancelled else "None",
-            "fraud_sub_reason": "Cancellation Signal" if cancelled else "None",
-            "fraud_reason_text": "Cancellation signal present in Shopify order payload" if cancelled else "",
-            "customer_dispute_comment": "",
-            "ops_resolution": "Pending" if cancelled or refunded else "Auto Approved",
+            "ops_resolution": "Pending" if refunded else "Auto Approved",
             "ops_resolution_note": "",
             "label_source": "Shopify Sync",
-            "label_confidence": 0.55 if cancelled or refunded else 0.25,
+            "label_confidence": 0.55 if refunded else 0.25,
             "reviewed_by": "",
             "reviewed_at": "",
             "dataset_mode": "Live",

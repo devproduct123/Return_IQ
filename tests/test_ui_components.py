@@ -58,8 +58,7 @@ def test_render_hero_summary_preserves_text(monkeypatch):
     assert "Risk Intelligence Summary" in rendered["body"]
     assert "$1.2K" in rendered["body"]
     assert "$500" in rendered["body"]
-    assert "Return risk pressure is highest in <b>Apparel</b>" in rendered["body"]
-    assert "fraud pressure is strongest in" in rendered["body"]
+    assert "Return risk is highest in <b>Apparel</b>" in rendered["body"]
 
 
 def test_render_case_detail_box_preserves_case_fields(monkeypatch):
@@ -114,8 +113,8 @@ def test_render_insight_footer_preserves_info_and_pilot_note(monkeypatch):
         "NY",
     )
 
-    assert fake_st.subheaders == ["AI Risk Insights"]
-    assert "**10.0%** of filtered orders are flagged high risk" in fake_st.infos[0]
+    assert fake_st.subheaders == ["Return Risk Insights"]
+    assert "**10.0%** of filtered orders are flagged for return risk" in fake_st.infos[0]
     assert "**2** cases are currently marked **High** priority" in fake_st.infos[0]
     assert "**$1.5K** in revenue has already been protected" in fake_st.infos[0]
     assert "Pilot with Aignita" in fake_st.markdowns[-1]["body"]

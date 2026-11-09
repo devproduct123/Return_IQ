@@ -14,8 +14,6 @@ def build_case_timeline(case_row: pd.Series):
     steps = [("Case Created", "done")]
 
     stage_map = {
-        "Verification Sent": "current",
-        "Awaiting Customer Response": "current",
         "Review Queue": "current",
         "High Returner Tagged": "current",
         "Awaiting Item Inspection": "current",
@@ -89,22 +87,21 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
     )
 
     top_state = safe_top_index(
-        data.groupby("state")["fraud_score"]
+        data.groupby("state")["return_risk_score"]
         .mean()
         .sort_values(ascending=False)
     )
 
     high_cases = int((data["priority_tier"] == "High").sum())
-
     top_action = safe_top_index(data["recommended_action"].value_counts())
 
     if "summary" in q or "summarize" in q or "overall" in q:
         return (
-            f"In the current filtered view, {flagged_orders:,} out of {total_orders:,} orders are flagged high risk. "
+            f"In the current filtered view, {flagged_orders:,} out of {total_orders:,} orders are flagged for return risk. "
             f"Revenue at risk is {format_currency(revenue_at_risk)}. "
             f"Protected revenue on closed flagged cases is {format_currency(protected_revenue)}. "
             f"There are {open_cases:,} open cases and {high_cases:,} high-priority cases. "
-            f"Return risk is highest in {top_category}, fraud risk is strongest in {top_state}, "
+            f"Return risk pressure is highest in {top_category}, with {top_state} as the top-risk state, "
             f"and the most common recommended action is {top_action}."
         )
 
@@ -121,15 +118,15 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
             f"Top products by return risk score are: {', '.join(top_return_products)}."
         )
 
-    if "fraud" in q and ("state" in q or "where" in q or "location" in q):
-        top_fraud_states = (
-            data.groupby("state")["fraud_score"]
+    if "state" in q or "where" in q or "location" in q:
+        top_return_states = (
+            data.groupby("state")["return_risk_score"]
             .mean()
             .sort_values(ascending=False)
             .head(3)
             .index.tolist()
         )
-        return f"The highest fraud-risk states in the current view are: {', '.join(top_fraud_states)}."
+        return f"The highest return-risk states in the current view are: {', '.join(top_return_states)}."
 
     if "revenue" in q and "risk" in q:
         return (
@@ -141,8 +138,8 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         if critical_open.empty:
             return "There are no open high-priority cases in the current filtered view."
         return (
-            f"There are {len(critical_open):,} open high-priority cases that should be reviewed first. "
-            f"Focus on the highest-value orders with the highest unified risk scores."
+            f"There are {len(critical_open):,} open high-priority return risk cases that should be reviewed first. "
+            f"Focus on the highest-value orders with the highest return risk scores."
         )
 
     if "action" in q or "recommended" in q:
@@ -155,7 +152,7 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
         return f"There are currently {open_cases:,} open cases in the filtered view."
 
     return (
-        "I can help summarize current risk, identify top fraud states, top return risk categories or products, "
+        "I can help summarize current return risk, identify top return-risk categories, products, or states, "
         "revenue at risk, protected revenue, open cases, and what the ops team should prioritize first."
     )
 
@@ -163,15 +160,9 @@ def answer_risk_question(question: str, data: pd.DataFrame) -> str:
 def _simplify_actual_outcome(row: pd.Series) -> str:
     outcome_type = str(row.get("outcome_type", ""))
     risk_type = str(row.get("risk_type", ""))
-    fraud_label = str(row.get("fraud_label", ""))
 
     if risk_type == "Returns" or outcome_type.startswith("Return"):
         return "Return Approved" if outcome_type == "Return Approved" else "Return Denied"
-
-    if risk_type == "Fraud" or fraud_label in {"Confirmed", "False Positive"}:
-        if outcome_type == "Verified & Released" or fraud_label == "False Positive":
-            return "Fraud Approved"
-        return "Fraud Denied"
 
     return "Other"
 
@@ -187,19 +178,11 @@ def answer_historical_question(question: str, data: pd.DataFrame) -> str:
     total_orders = len(view)
     actual_returns = int(view["actual_outcome"].eq("Return Approved").sum())
     denied_returns = int(view["actual_outcome"].eq("Return Denied").sum())
-    fraud_approved = int(view["actual_outcome"].eq("Fraud Approved").sum())
-    fraud_denied = int(view["actual_outcome"].eq("Fraud Denied").sum())
     total_loss = float(
-        view.loc[
-            view["actual_outcome"].isin(["Return Approved", "Fraud Approved"]),
-            "order_value",
-        ].sum()
+        view.loc[view["actual_outcome"].eq("Return Approved"), "order_value"].sum()
     )
     avoided_loss = float(
-        view.loc[
-            view["actual_outcome"].isin(["Return Denied", "Fraud Denied"]),
-            "order_value",
-        ].sum()
+        view.loc[view["actual_outcome"].eq("Return Denied"), "order_value"].sum()
     )
 
     top_return_category = safe_top_index(
@@ -216,16 +199,9 @@ def answer_historical_question(question: str, data: pd.DataFrame) -> str:
         .sort_values(ascending=False),
         default="None",
     )
-    top_fraud_state = safe_top_index(
-        view.loc[view["actual_outcome"].eq("Fraud Approved")]
+    top_return_state = safe_top_index(
+        view.loc[view["actual_outcome"].eq("Return Approved")]
         .groupby("state")["order_value"]
-        .sum()
-        .sort_values(ascending=False),
-        default="None",
-    )
-    top_fraud_payment = safe_top_index(
-        view.loc[view["actual_outcome"].eq("Fraud Approved")]
-        .groupby("payment_method")["order_value"]
         .sum()
         .sort_values(ascending=False),
         default="None",
@@ -233,33 +209,29 @@ def answer_historical_question(question: str, data: pd.DataFrame) -> str:
 
     if "summary" in q or "summarize" in q or "overall" in q:
         return (
-            f"In the historical view, {total_orders:,} completed orders produced {actual_returns:,} approved returns, "
-            f"{denied_returns:,} denied returns, {fraud_approved:,} fraud-approved/released cases, and "
-            f"{fraud_denied:,} fraud-denied/blocked cases. Total loss was {format_currency(total_loss)}, "
+            f"In the historical view, {total_orders:,} completed orders produced {actual_returns:,} approved returns "
+            f"and {denied_returns:,} denied returns. Total return loss was {format_currency(total_loss)}, "
             f"while avoided exposure was {format_currency(avoided_loss)}."
         )
 
-    if "return" in q and ("category" in q or "product" in q or "driver" in q):
+    if "category" in q or "product" in q or "driver" in q:
         return (
             f"Approved return loss is highest in category {top_return_category}. "
             f"The top product by approved return loss is {top_return_product}."
         )
 
-    if "fraud" in q and ("state" in q or "where" in q or "location" in q):
-        return f"Fraud-approved loss is highest in {top_fraud_state}."
-
-    if "payment" in q:
-        return f"The payment method with the highest fraud-approved loss is {top_fraud_payment}."
+    if "state" in q or "where" in q or "location" in q:
+        return f"Approved return loss is highest in {top_return_state}."
 
     if "loss" in q or "dollar" in q or "revenue" in q:
         return (
-            f"Total historical loss from approved returns and fraud-approved orders is {format_currency(total_loss)}. "
-            f"Avoided exposure from denied returns and denied fraud is {format_currency(avoided_loss)}."
+            f"Total historical loss from approved returns is {format_currency(total_loss)}. "
+            f"Avoided exposure from denied returns is {format_currency(avoided_loss)}."
         )
 
     return (
-        "I can summarize actual historical outcomes, approved return loss, fraud-approved loss, avoided exposure, "
-        "top return-loss categories/products, top fraud-loss states/payment methods, and reason-code patterns."
+        "I can summarize actual historical return outcomes, approved return loss, avoided exposure, "
+        "top return-loss categories, products, states, and reason-code patterns."
     )
 
 
@@ -277,27 +249,19 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
     recommended_action = case_row["recommended_action"]
     next_step = case_row["ai_agent_next_step"]
     risk_reason = case_row["risk_reason_summary"]
-    fraud_score = float(case_row["fraud_score"])
     return_score = float(case_row["return_risk_score"])
-    unified_score = float(case_row["unified_risk_score"])
     order_value = float(case_row["order_value"])
     past_returns = int(case_row["past_returns"])
-    chargeback_history = int(case_row["chargeback_history"])
-    payment_method = case_row["payment_method"]
+    past_orders = int(case_row.get("past_orders", 1))
     product_name = case_row["product_name"]
     product_category = case_row["product_category"]
-    state = case_row["state"]
-    country = case_row["country"]
     return_reason = case_row.get("return_reason_code", "None")
     return_comment = str(case_row.get("customer_return_comment", "")).strip()
-    fraud_label = case_row.get("fraud_label", "Unknown")
-    fraud_reason = case_row.get("fraud_reason_code", "None")
-    dispute_comment = str(case_row.get("customer_dispute_comment", "")).strip()
 
     if "summary" in q or "summarize" in q or "case" in q:
         return (
             f"Order {order_id} is a {priority}-priority {risk_type} case with status {case_status}. "
-            f"The order value is {format_currency(order_value)}, unified risk score is {unified_score:.3f}, "
+            f"The order value is {format_currency(order_value)}, return risk score is {return_score:.3f}, "
             f"and the current workflow stage is {workflow_stage}. "
             f"Recommended action is {recommended_action}. Main reason flagged: {risk_reason}"
         )
@@ -305,8 +269,7 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
     if "why" in q or "flagged" in q or "reason" in q:
         return (
             f"This case was flagged as {risk_type}. "
-            f"Fraud score is {fraud_score:.3f}, return risk score is {return_score:.3f}, "
-            f"and unified risk score is {unified_score:.3f}. "
+            f"Return risk score is {return_score:.3f}. "
             f"Primary reason: {risk_reason}"
         )
 
@@ -317,26 +280,17 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
             f"Current stage is {workflow_stage}, so the analyst should align the next review step with that stage."
         )
 
-    if "fraud" in q:
-        comment_text = f" Customer dispute comment: {dispute_comment}" if dispute_comment else ""
-        return (
-            f"Fraud score for order {order_id} is {fraud_score:.3f}. "
-            f"Payment method is {payment_method}, and the order location is {state}, {country}. "
-            f"Current fraud label is {fraud_label}; reason code is {fraud_reason}.{comment_text}"
-        )
-
     if "return" in q:
+        return_rate = past_returns / max(past_orders, 1)
         comment_text = f" Customer return comment: {return_comment}" if return_comment else ""
         return (
             f"Return risk score for order {order_id} is {return_score:.3f}. "
-            f"The product is {product_name} in category {product_category}, and the customer has {past_returns} past returns. "
+            f"The product is {product_name} in category {product_category}. "
+            f"The customer has {past_returns} past returns out of {past_orders} orders ({return_rate:.0%} return rate). "
             f"Return reason code is {return_reason}.{comment_text}"
         )
 
-    if "chargeback" in q:
-        return f"The customer has {chargeback_history} prior chargebacks associated with this case."
-
-    if "customer" in q or "verification" in q:
+    if "customer" in q or "verification" in q or "inspect" in q:
         return (
             f"For this case, a reasonable analyst path is to use the recommended action '{recommended_action}' "
             f"and the AI next step '{next_step}' while requesting only the minimum required customer verification."
@@ -344,5 +298,5 @@ def answer_case_question(question: str, case_row: pd.Series | None) -> str:
 
     return (
         f"I can help explain why order {order_id} was flagged, summarize the case, recommend the next step, "
-        f"or answer questions about fraud signals, return risk signals, verification, and escalation."
+        f"or answer questions about return risk signals, return history, verification, and escalation."
     )

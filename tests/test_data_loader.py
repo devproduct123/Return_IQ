@@ -32,10 +32,8 @@ def _valid_row(**overrides):
         "order_value": 100.0,
         "past_orders": 5,
         "past_returns": 1,
-        "chargeback_history": 0,
         "discount_used": 0,
         "expedited_shipping": 0,
-        "fraud_score": 0.1,
         "return_risk_score": 0.2,
         "unified_risk_score": 0.2,
         "risk_level": "High",
@@ -91,11 +89,11 @@ def test_load_data_derives_latest_action_when_missing(tmp_path):
 def test_derive_latest_action_taken_for_common_workflow_states():
     assert derive_latest_action_taken("Allow", "Closed", "Resolved") == "Order approved"
     assert derive_latest_action_taken(
-        "Hold Fulfillment", "Open", "Verification Sent"
-    ) == "Customer verification sent"
-    assert derive_latest_action_taken(
         "Restrict Return / Refund", "Pending", "Awaiting Item Inspection"
     ) == "Awaiting item inspection"
+    assert derive_latest_action_taken(
+        "Soft Review", "Open", "Watchlist Monitoring"
+    ) == "Case under watchlist monitoring"
 
 
 
@@ -151,7 +149,6 @@ def test_normalize_shopify_orders_maps_to_required_schema():
     assert df.loc[0, "recommended_action"] == "Allow"
     assert df.loc[0, "latest_action_taken"] == "Order approved"
     assert df.loc[0, "return_reason_code"] == "None"
-    assert df.loc[0, "fraud_label"] == "Unknown"
 
 
 def test_load_connector_data_finalizes_shopify_payload():

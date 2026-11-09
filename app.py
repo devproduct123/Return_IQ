@@ -26,6 +26,16 @@ from src.metrics import (
     safe_top_index,
     to_csv_download,
 )
+from src.model_learning import (
+    INTERVENTIONS,
+    METRIC_LABELS,
+    build_backlog_candidates,
+    compute_learning_kpis,
+    find_return_patterns,
+    measure_interventions,
+    prepare_learning_frame,
+    summarize_model_misses,
+)
 from src.risk_logic import (
     answer_historical_question,
     answer_case_question,
@@ -48,7 +58,7 @@ from src.ui_components import (
     render_verification_templates,
 )
 
-st.set_page_config(page_title="Aignita Risk Intelligence", layout="wide")
+st.set_page_config(page_title="Aignita Return Risk Intelligence", layout="wide")
 
 st.markdown("""
 <style>
@@ -307,7 +317,6 @@ st.markdown("""
 .badge-high     { background:#fff7ed; color:#ea580c; border:1px solid #fed7aa; }
 .badge-moderate { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
 .badge-low      { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
-.badge-fraud    { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; }
 .badge-return   { background:#fffbeb; color:#d97706; border:1px solid #fde68a; }
 .badge-open     { background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; }
 .badge-closed   { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
@@ -317,9 +326,8 @@ st.markdown("""
 
 # ── Chart styling ───────────────────────────────────────────────────────────────
 
-CHART_COLORS = ["#2563eb", "#0ea5e9", "#16a34a", "#dc2626", "#d97706", "#7c3aed", "#64748b"]
+CHART_COLORS = ["#d97706", "#16a34a", "#2563eb", "#dc2626", "#0ea5e9", "#7c3aed", "#64748b"]
 PRIORITY_COLORS = {"High": "#dc2626", "Moderate": "#d97706", "Low": "#16a34a"}
-RISK_TYPE_COLORS = {"Fraud Risk": "#2563eb", "Return Risk": "#d97706"}
 DEMO_MERCHANT_NAME = "Meridian Commerce"
 DEMO_PLATFORM = "Shopify"
 DEMO_LAST_SYNC = "January 2026 Snapshot"
@@ -489,22 +497,16 @@ OPS_ACTIONS = {
         "latest_action_taken": "Review started by operations",
         "outcome_type": "Pending",
     },
-    "Send Verification": {
+    "Flag for Inspection": {
         "case_status": "Open",
-        "workflow_stage": "Verification Sent",
-        "latest_action_taken": "Customer verification sent",
+        "workflow_stage": "Awaiting Item Inspection",
+        "latest_action_taken": "Flagged for item inspection",
         "outcome_type": "Pending",
     },
-    "Await Customer Response": {
+    "Tag as High Returner": {
         "case_status": "Open",
-        "workflow_stage": "Awaiting Customer Response",
-        "latest_action_taken": "Awaiting customer response",
-        "outcome_type": "Pending",
-    },
-    "Hold Fulfillment": {
-        "case_status": "Open",
-        "workflow_stage": "Review Queue",
-        "latest_action_taken": "Fulfillment held by operations",
+        "workflow_stage": "High Returner Tagged",
+        "latest_action_taken": "High returner tagged by operations",
         "outcome_type": "Pending",
     },
     "Approve Order": {
@@ -518,6 +520,12 @@ OPS_ACTIONS = {
         "workflow_stage": "Resolved",
         "latest_action_taken": "Return/refund restricted by operations",
         "outcome_type": "Return Restricted",
+    },
+    "Add to Watchlist": {
+        "case_status": "Open",
+        "workflow_stage": "Watchlist Monitoring",
+        "latest_action_taken": "Customer added to return watchlist",
+        "outcome_type": "Pending",
     },
     "Escalate to Senior Review": {
         "case_status": "Open",
@@ -549,30 +557,13 @@ DEFAULT_LEARNING_BACKLOG = {
             "model_signal": "product_category:Apparel:repeat_return_review",
             "rationale": "Evaluate stricter review routing for repeat Apparel returns with elevated historical loss.",
         },
-        {
-            "created_at": "2026-02-01T16:00:00+00:00",
-            "source": "Seeded Case Learning Note",
-            "focus_area": "Fraud",
-            "condition_field": "recommended_action",
-            "condition_value": "Hold Fulfillment",
-            "guidance": "Require manual review",
-            "priority": "High",
-            "owner": "Fraud Ops",
-            "model_signal": "ato:device_mismatch:manual_review",
-            "rationale": "Escalate account-takeover signals when device mismatch and fulfillment holds occur together.",
-        },
     ],
 }
 FINAL_DECISION_OPTIONS = {
-    "Fraud": ["Pending", "Fraud Confirmed", "Fraud False Positive"],
     "Returns": ["Pending", "Return Approved", "Return Denied"],
     "None": ["Pending", "Order Approved"],
 }
 RESOLUTION_REASON_OPTIONS = {
-    "Fraud": [
-        "Transaction Fraud", "Account Takeover (ATO)", "Chargeback Abuse",
-        "Item Not Received (INR)",
-    ],
     "Returns": [
         "Doesn't Fit Me", "Not What I Expected", "Changed My Mind",
         "Product Quality Issues", "Fulfillment Issues",
@@ -656,11 +647,6 @@ def ensure_lifecycle_intelligence(data: pd.DataFrame) -> pd.DataFrame:
         "return_sub_reason": "None",
         "return_reason_text": "",
         "customer_return_comment": "",
-        "fraud_label": "Unknown",
-        "fraud_reason_code": "None",
-        "fraud_sub_reason": "None",
-        "fraud_reason_text": "",
-        "customer_dispute_comment": "",
         "ops_resolution": "Pending",
         "ops_resolution_note": "",
         "label_source": "System",
@@ -710,7 +696,7 @@ def apply_work_mode(data: pd.DataFrame, work_mode: str) -> pd.DataFrame:
 
 def render_mode_panel(work_mode: str, data: pd.DataFrame):
     mode_text = (
-        "Actual outcomes, return/fraud labels, customer comments, and ops resolutions."
+        "Actual outcomes, return labels, customer comments, and ops resolutions."
         if work_mode == "Historical Intelligence"
         else "Predicted risk, open workflow stages, recommended actions, and analyst feedback capture."
     )
@@ -726,19 +712,16 @@ def render_mode_panel(work_mode: str, data: pd.DataFrame):
 
 def build_historical_kpis(data: pd.DataFrame) -> dict:
     total = len(data)
-    return_completed = int(data["return_completed"].astype(int).sum()) if total else 0
-    confirmed_fraud = int(data["fraud_label"].astype(str).eq("Confirmed").sum()) if total else 0
-    return_requested = int(data["return_requested"].astype(int).sum()) if total else 0
-    false_positive = int(data["fraud_label"].astype(str).eq("False Positive").sum()) if total else 0
-    reviewed = int(data["label_source"].astype(str).isin(["Ops Review", "System Auto Label"]).sum()) if total else 0
+    approved_mask = data["return_completed"].astype(int).eq(1)
+    requested_mask = data["return_requested"].astype(int).eq(1)
+    approved_returns = int(approved_mask.sum())
+    return_requests = int(requested_mask.sum())
     return {
-        "actual_returns": return_completed,
-        "return_requests": return_requested,
-        "confirmed_fraud": confirmed_fraud,
-        "actual_return_rate": return_completed / total * 100 if total else 0.0,
-        "confirmed_fraud_rate": confirmed_fraud / total * 100 if total else 0.0,
-        "false_positive_count": false_positive,
-        "reviewed_count": reviewed,
+        "return_requests": return_requests,
+        "return_request_rate": return_requests / total * 100 if total else 0.0,
+        "approved_returns": approved_returns,
+        "approved_return_rate": approved_returns / total * 100 if total else 0.0,
+        "approved_return_value": float(data.loc[approved_mask, "order_value"].sum()),
     }
 
 
@@ -746,10 +729,7 @@ def calculate_historical_total_loss(data: pd.DataFrame) -> float:
     view = data.copy()
     view["actual_outcome"] = view.apply(simplify_actual_outcome, axis=1)
     return float(
-        view.loc[
-            view["actual_outcome"].isin(["Return Approved", "Fraud Approved"]),
-            "order_value",
-        ].sum()
+        view.loc[view["actual_outcome"].eq("Return Approved"), "order_value"].sum()
     )
 
 
@@ -758,13 +738,10 @@ def render_historical_insight_footer(data: pd.DataFrame):
     view["actual_outcome"] = view.apply(simplify_actual_outcome, axis=1)
     total_orders = len(view)
     actual_returns = int(view["actual_outcome"].eq("Return Approved").sum())
-    confirmed_fraud = int(view["actual_outcome"].eq("Fraud Denied").sum())
+    denied_returns = int(view["actual_outcome"].eq("Return Denied").sum())
     total_loss = calculate_historical_total_loss(view)
     avoided_loss = float(
-        view.loc[
-            view["actual_outcome"].isin(["Return Denied", "Fraud Denied"]),
-            "order_value",
-        ].sum()
+        view.loc[view["actual_outcome"].eq("Return Denied"), "order_value"].sum()
     )
     top_return_loss_category = safe_top_index(
         view.loc[view["actual_outcome"].eq("Return Approved")]
@@ -773,8 +750,8 @@ def render_historical_insight_footer(data: pd.DataFrame):
         .sort_values(ascending=False),
         default="None",
     )
-    top_fraud_loss_state = safe_top_index(
-        view.loc[view["actual_outcome"].eq("Fraud Approved")]
+    top_return_loss_state = safe_top_index(
+        view.loc[view["actual_outcome"].eq("Return Approved")]
         .groupby("state")["order_value"]
         .sum()
         .sort_values(ascending=False),
@@ -782,14 +759,14 @@ def render_historical_insight_footer(data: pd.DataFrame):
     )
 
     st.markdown("---")
-    st.subheader("Historical Outcome Insights")
+    st.subheader("Historical Return Outcome Insights")
     st.info(f"""
 - **{actual_returns:,}** approved returns occurred across **{total_orders:,}** completed historical orders.
-- **{confirmed_fraud:,}** fraud cases were denied or blocked after review.
-- **{format_currency(total_loss)}** in historical loss came from approved returns and fraud-approved orders.
-- **{format_currency(avoided_loss)}** in exposure was avoided through denied returns and denied fraud.
-- **{top_return_loss_category}** drove the highest approved-return loss.
-- **{top_fraud_loss_state}** drove the highest fraud-approved loss by state.
+- **{denied_returns:,}** return requests were denied or restricted after review.
+- **{format_currency(total_loss)}** in historical loss came from approved returns.
+- **{format_currency(avoided_loss)}** in exposure was avoided through denied returns.
+- **{top_return_loss_category}** drove the highest approved-return loss by category.
+- **{top_return_loss_state}** drove the highest approved-return loss by state.
 """)
 
 
@@ -799,38 +776,26 @@ def render_historical_hero_summary(data: pd.DataFrame):
 
     total_orders = len(view)
     return_count = int(view["actual_outcome"].isin(["Return Approved", "Return Denied"]).sum())
-    fraud_count = int(view["actual_outcome"].isin(["Fraud Approved", "Fraud Denied"]).sum())
     denied_impact = float(
-        view.loc[
-            view["actual_outcome"].isin(["Return Denied", "Fraud Denied"]),
-            "order_value",
-        ].sum()
+        view.loc[view["actual_outcome"].eq("Return Denied"), "order_value"].sum()
     )
     approved_impact = float(
-        view.loc[
-            view["actual_outcome"].isin(["Return Approved", "Fraud Approved"]),
-            "order_value",
-        ].sum()
+        view.loc[view["actual_outcome"].eq("Return Approved"), "order_value"].sum()
     )
     top_return_reason = safe_top_index(
         view.loc[view["return_reason_code"].astype(str).ne("None"), "return_reason_code"].value_counts(),
         default="None",
     )
-    top_fraud_reason = safe_top_index(
-        view.loc[view["fraud_reason_code"].astype(str).ne("None"), "fraud_reason_code"].value_counts(),
-        default="None",
-    )
 
     st.markdown(f"""
 <div class="riq-hero">
-  <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#94a3b8;margin-bottom:0.4rem;">Historical Outcome Summary</div>
+  <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#94a3b8;margin-bottom:0.4rem;">Historical Return Outcome Summary</div>
   <div style="font-size:0.9rem;color:#334155;line-height:1.75;">
     Across <b>{total_orders:,}</b> completed historical orders, there were
-    <b>{return_count:,}</b> return outcomes and <b>{fraud_count:,}</b> fraud review outcomes.
-    Denied returns and blocked fraud represented <b>{format_currency(denied_impact)}</b> in avoided exposure,
-    while approved returns and released fraud reviews represented <b>{format_currency(approved_impact)}</b>.
-    The most common return reason was <b>{top_return_reason}</b>, and the most common fraud reason was
-    <b>{top_fraud_reason}</b>.
+    <b>{return_count:,}</b> return outcomes reviewed.
+    Denied returns represented <b>{format_currency(denied_impact)}</b> in avoided exposure,
+    while approved returns represented <b>{format_currency(approved_impact)}</b> in actual loss.
+    The most common return reason was <b>{top_return_reason}</b>.
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -863,149 +828,91 @@ def render_reason_chart(container, data: pd.DataFrame, column: str, title: str, 
 def simplify_actual_outcome(row: pd.Series) -> str:
     outcome_type = str(row.get("outcome_type", ""))
     risk_type = str(row.get("risk_type", ""))
-    fraud_label = str(row.get("fraud_label", ""))
 
     if risk_type == "Returns" or outcome_type.startswith("Return"):
-        if outcome_type == "Return Approved":
-            return "Return Approved"
-        return "Return Denied"
-
-    if risk_type == "Fraud" or fraud_label in {"Confirmed", "False Positive"}:
-        if outcome_type == "Verified & Released" or fraud_label == "False Positive":
-            return "Fraud Approved"
-        return "Fraud Denied"
+        return "Return Approved" if outcome_type == "Return Approved" else "Return Denied"
 
     return "Other"
 
 
-def build_reason_outcome_breakdown(
-    data: pd.DataFrame,
-    outcomes: list[str],
-    reason_column: str,
-    value_mode: str,
-) -> pd.DataFrame:
+RETURN_OUTCOMES = ["Return Approved", "Return Denied"]
+REQUESTED_APPROVED_COLORS = {
+    "Requested Returns": "#d97706",
+    "Approved Returns": "#16a34a",
+}
+
+
+def summarize_requested_vs_approved(data: pd.DataFrame, group_column: str) -> pd.DataFrame:
+    """Per group: dollars and counts for all return requests and for approved returns."""
     view = data[
-        data["actual_outcome"].isin(outcomes)
-        & data[reason_column].astype(str).ne("None")
-        & data[reason_column].astype(str).str.strip().ne("")
+        data["actual_outcome"].isin(RETURN_OUTCOMES)
+        & data[group_column].astype(str).ne("None")
+        & data[group_column].astype(str).str.strip().ne("")
     ].copy()
-
+    columns = [group_column, "requested_value", "approved_value", "requested_cases", "approved_cases"]
     if view.empty:
-        return pd.DataFrame(columns=[reason_column, "actual_outcome", "value"])
+        return pd.DataFrame(columns=columns)
 
-    if value_mode == "dollars":
-        breakdown = (
-            view.groupby([reason_column, "actual_outcome"], as_index=False)["order_value"]
-            .sum()
-            .rename(columns={"order_value": "value"})
+    view["approved_value"] = view["order_value"].where(view["actual_outcome"].eq("Return Approved"), 0.0)
+    view["is_approved"] = view["actual_outcome"].eq("Return Approved").astype(int)
+    summary = (
+        view.groupby(group_column, as_index=False)
+        .agg(
+            requested_value=("order_value", "sum"),
+            approved_value=("approved_value", "sum"),
+            requested_cases=("order_id", "count"),
+            approved_cases=("is_approved", "sum"),
         )
-    else:
-        breakdown = (
-            view.groupby([reason_column, "actual_outcome"], as_index=False)
-            .size()
-            .rename(columns={"size": "value"})
-        )
-
-    approved_outcome = outcomes[0]
-    approved_order = (
-        breakdown[breakdown["actual_outcome"].eq(approved_outcome)]
-        .groupby(reason_column)["value"]
-        .sum()
-        .sort_values(ascending=False)
+        .sort_values("requested_value", ascending=False)
     )
-    total_order = breakdown.groupby(reason_column)["value"].sum().sort_values(ascending=False)
-    reason_order = approved_order.index.tolist()
-    reason_order.extend([reason for reason in total_order.index.tolist() if reason not in reason_order])
-    reason_order = reason_order[:8]
-
-    filtered = breakdown[breakdown[reason_column].isin(reason_order)].copy()
-    filtered[reason_column] = pd.Categorical(filtered[reason_column], categories=reason_order, ordered=True)
-    return filtered.sort_values([reason_column, "actual_outcome"])
+    return summary[columns]
 
 
-def render_reason_outcome_chart(
-    container,
-    data: pd.DataFrame,
-    outcomes: list[str],
-    reason_column: str,
-    title: str,
-    value_mode: str,
-):
-    breakdown = build_reason_outcome_breakdown(
-        data=data,
-        outcomes=outcomes,
-        reason_column=reason_column,
-        value_mode=value_mode,
+def melt_requested_vs_approved(summary: pd.DataFrame, group_column: str) -> pd.DataFrame:
+    chart_data = summary.melt(
+        id_vars=[group_column, "requested_cases", "approved_cases"],
+        value_vars=["requested_value", "approved_value"],
+        var_name="measure",
+        value_name="dollar_value",
     )
-    if breakdown.empty:
+    chart_data["measure"] = chart_data["measure"].map({
+        "requested_value": "Requested Returns",
+        "approved_value": "Approved Returns",
+    })
+    return chart_data
+
+
+def render_reason_outcome_chart(container, data: pd.DataFrame, reason_column: str, title: str):
+    summary = summarize_requested_vs_approved(data, reason_column).head(8)
+    if summary.empty:
         container.info(f"No data available for {title.lower()}.")
         return
 
-    y_label = "Dollar Impact" if value_mode == "dollars" else "Orders"
     fig = px.bar(
-        breakdown,
+        melt_requested_vs_approved(summary, reason_column),
         x=reason_column,
-        y="value",
-        color="actual_outcome",
+        y="dollar_value",
+        color="measure",
         barmode="group",
         title=title,
         labels={
             reason_column: "Reason",
-            "value": y_label,
-            "actual_outcome": "Outcome",
+            "dollar_value": "Dollar Value",
+            "measure": "",
+            "requested_cases": "Requested Units",
+            "approved_cases": "Approved Units",
         },
-        color_discrete_map={
-            "Return Approved": "#16a34a",
-            "Return Denied": "#d97706",
-            "Fraud Approved": "#0ea5e9",
-            "Fraud Denied": "#dc2626",
-        },
+        hover_data={"requested_cases": True, "approved_cases": True, "measure": False},
+        category_orders={"measure": list(REQUESTED_APPROVED_COLORS)},
+        color_discrete_map=REQUESTED_APPROVED_COLORS,
     )
     container.plotly_chart(style_chart(fig, showlegend=True, x_tickangle=-25), width="stretch")
-
-
-def build_sub_reason_drilldown(
-    data: pd.DataFrame,
-    driver_column: str,
-    selected_driver: str,
-    sub_reason_column: str,
-    approved_outcome: str,
-    denied_outcome: str,
-) -> pd.DataFrame:
-    view = data[
-        data[driver_column].astype(str).eq(str(selected_driver))
-        & data[sub_reason_column].astype(str).ne("None")
-        & data[sub_reason_column].astype(str).str.strip().ne("")
-    ].copy()
-    if view.empty:
-        return pd.DataFrame(
-            columns=[
-                "sub_reason", "approved_loss", "denied_or_prevented_loss",
-                "approved_cases", "denied_cases", "total_impact",
-            ]
-        )
-
-    grouped = (
-        view.groupby(sub_reason_column)
-        .agg(
-            approved_loss=("order_value", lambda s: s[view.loc[s.index, "actual_outcome"].eq(approved_outcome)].sum()),
-            denied_or_prevented_loss=("order_value", lambda s: s[view.loc[s.index, "actual_outcome"].eq(denied_outcome)].sum()),
-            approved_cases=("actual_outcome", lambda s: int(s.eq(approved_outcome).sum())),
-            denied_cases=("actual_outcome", lambda s: int(s.eq(denied_outcome).sum())),
-        )
-        .reset_index()
-        .rename(columns={sub_reason_column: "sub_reason"})
-    )
-    grouped["total_impact"] = grouped["approved_loss"] + grouped["denied_or_prevented_loss"]
-    return grouped.sort_values("approved_loss", ascending=False)
 
 
 def render_driver_drilldown(
     data: pd.DataFrame,
     driver_column: str,
     sub_reason_column: str,
-    approved_outcome: str,
-    denied_outcome: str,
     title: str,
     selector_key: str,
 ):
@@ -1026,64 +933,126 @@ def render_driver_drilldown(
         return
 
     selected_driver = st.selectbox(title, driver_options, key=selector_key)
-    drilldown = build_sub_reason_drilldown(
-        data=data,
-        driver_column=driver_column,
-        selected_driver=selected_driver,
-        sub_reason_column=sub_reason_column,
-        approved_outcome=approved_outcome,
-        denied_outcome=denied_outcome,
-    )
+    driver_view = data[data[driver_column].astype(str).eq(str(selected_driver))]
+    drilldown = summarize_requested_vs_approved(driver_view, sub_reason_column)
     if drilldown.empty:
         st.info("No sub-reason detail is available for this driver.")
         return
 
-    chart_data = drilldown.melt(
-        id_vars=["sub_reason", "approved_cases", "denied_cases"],
-        value_vars=["approved_loss", "denied_or_prevented_loss"],
-        var_name="impact_type",
-        value_name="dollar_impact",
-    )
-    chart_data["impact_type"] = chart_data["impact_type"].map({
-        "approved_loss": "Approved Loss",
-        "denied_or_prevented_loss": "Denied / Prevented Exposure",
-    })
-
     fig = px.bar(
-        chart_data,
-        x="sub_reason",
-        y="dollar_impact",
-        color="impact_type",
+        melt_requested_vs_approved(drilldown, sub_reason_column),
+        x=sub_reason_column,
+        y="dollar_value",
+        color="measure",
         barmode="group",
         title=f"{selected_driver} Level 2 Drivers",
         labels={
-            "sub_reason": "Level 2 Driver",
-            "dollar_impact": "Dollar Impact",
-            "impact_type": "Impact",
+            sub_reason_column: "Level 2 Driver",
+            "dollar_value": "Dollar Value",
+            "measure": "",
+            "requested_cases": "Requested Units",
             "approved_cases": "Approved Units",
-            "denied_cases": "Denied Units",
         },
-        hover_data={
-            "approved_cases": True,
-            "denied_cases": True,
-            "impact_type": False,
-        },
-        color_discrete_map={
-            "Approved Loss": "#16a34a" if approved_outcome.startswith("Return") else "#0ea5e9",
-            "Denied / Prevented Exposure": "#d97706" if approved_outcome.startswith("Return") else "#dc2626",
-        },
+        hover_data={"requested_cases": True, "approved_cases": True, "measure": False},
+        category_orders={"measure": list(REQUESTED_APPROVED_COLORS)},
+        color_discrete_map=REQUESTED_APPROVED_COLORS,
     )
     st.plotly_chart(style_chart(fig, showlegend=True, x_tickangle=-20), width="stretch")
     with st.expander("View details"):
+        details = drilldown.rename(columns={sub_reason_column: "sub_reason"}).assign(
+            approval_rate=lambda d: d["approved_cases"] / d["requested_cases"]
+        )
         st.dataframe(
-            drilldown.style.format({
-                "approved_loss": "${:,.2f}",
-                "denied_or_prevented_loss": "${:,.2f}",
-                "total_impact": "${:,.2f}",
+            details.style.format({
+                "requested_value": "${:,.2f}",
+                "approved_value": "${:,.2f}",
+                "approval_rate": "{:.0%}",
             }),
             width="stretch",
             hide_index=True,
         )
+
+
+# Interventions from the demo case study (defined in src/model_learning.py). Drawn
+# only when the date falls inside the filtered data range.
+CASE_STUDY_MILESTONES = [(item["date"], item["label"]) for item in INTERVENTIONS]
+
+
+def add_milestone_markers(fig, dates: pd.Series):
+    if dates.empty:
+        return fig
+    start, end = dates.min(), dates.max() + pd.offsets.MonthEnd(0)
+    for index, (date_text, label) in enumerate(CASE_STUDY_MILESTONES):
+        marker = pd.Timestamp(date_text)
+        if not (start <= marker <= end):
+            continue
+        fig.add_shape(
+            type="line", x0=marker, x1=marker, y0=0, y1=1, yref="paper",
+            line=dict(color="#16a34a", width=1.5, dash="dash"),
+        )
+        fig.add_annotation(
+            x=marker, y=1 - 0.09 * index, yref="paper", text=label, showarrow=False,
+            xanchor="left", xshift=4, font=dict(size=10, color="#15803d"),
+            bgcolor="rgba(255,255,255,0.85)",
+        )
+    return fig
+
+
+def render_monthly_return_trend(historical_df: pd.DataFrame):
+    view = historical_df.assign(
+        month=historical_df["order_date"].dt.to_period("M").dt.to_timestamp()
+    )
+    monthly = view.groupby("month").agg(
+        orders=("order_id", "count"),
+        requested=("actual_outcome", lambda s: s.isin(["Return Approved", "Return Denied"]).sum()),
+        approved=("actual_outcome", lambda s: s.eq("Return Approved").sum()),
+    ).reset_index()
+    if len(monthly) < 2:
+        return
+
+    monthly["Return request rate"] = (monthly["requested"] / monthly["orders"] * 100).round(1)
+    monthly["Approved return rate"] = (monthly["approved"] / monthly["orders"] * 100).round(1)
+    rate_long = monthly.melt(
+        id_vars="month",
+        value_vars=["Return request rate", "Approved return rate"],
+        var_name="metric",
+        value_name="rate",
+    )
+
+    st.markdown("### Monthly Return Trend")
+    trend_col1, trend_col2 = st.columns(2)
+
+    rate_fig = px.line(
+        rate_long, x="month", y="rate", color="metric", markers=True,
+        title="Return Rate by Month (%)",
+        labels={"month": "Order Month", "rate": "% of Orders", "metric": ""},
+        color_discrete_sequence=["#d97706", "#dc2626"],
+    )
+    trend_col1.plotly_chart(
+        style_chart(add_milestone_markers(rate_fig, monthly["month"]), height=400, showlegend=True),
+        width="stretch",
+    )
+
+    reason_monthly = (
+        view[view["actual_outcome"].isin(["Return Approved", "Return Denied"])]
+        .groupby(["month", "return_reason_code"], as_index=False)["order_id"]
+        .count()
+        .rename(columns={"order_id": "returns", "return_reason_code": "reason"})
+    )
+    reason_fig = px.bar(
+        reason_monthly, x="month", y="returns", color="reason",
+        title="Return Requests by Reason",
+        labels={"month": "Order Month", "returns": "Return Requests", "reason": ""},
+    )
+    reason_fig = style_chart(
+        add_milestone_markers(reason_fig, monthly["month"]), height=400, showlegend=True
+    )
+    # Five reasons don't fit in the top legend strip, so place them below the axis.
+    reason_fig.update_layout(
+        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5),
+        margin=dict(b=110),
+    )
+    trend_col2.plotly_chart(reason_fig, width="stretch")
 
 
 def render_historical_intelligence_view(data: pd.DataFrame):
@@ -1102,68 +1071,32 @@ def render_historical_intelligence_view(data: pd.DataFrame):
 
     historical_df["actual_outcome"] = historical_df.apply(simplify_actual_outcome, axis=1)
 
-    dollar_impact = (
-        historical_df[historical_df["actual_outcome"].ne("Other")]
-        .groupby("actual_outcome", as_index=False)["order_value"]
-        .sum()
-    )
-    dollar_impact = (
-        dollar_impact.set_index("actual_outcome")
-        .reindex(["Return Approved", "Return Denied", "Fraud Approved", "Fraud Denied"], fill_value=0)
-        .reset_index()
-    )
-    impact_lookup = dict(zip(dollar_impact["actual_outcome"], dollar_impact["order_value"]))
-    di1, di2, di3, di4 = st.columns(4)
-    di1.metric("Return Approved $", format_currency(float(impact_lookup.get("Return Approved", 0))))
-    di2.metric("Return Denied $", format_currency(float(impact_lookup.get("Return Denied", 0))))
-    di3.metric("Fraud Approved $", format_currency(float(impact_lookup.get("Fraud Approved", 0))))
-    di4.metric("Fraud Denied $", format_currency(float(impact_lookup.get("Fraud Denied", 0))))
+    render_monthly_return_trend(historical_df)
 
     st.markdown("### Level 1 Driver Charts")
     render_reason_outcome_chart(
         st,
         historical_df,
-        ["Return Approved", "Return Denied"],
         "return_reason_code",
-        "Return Approved vs Denied by Reason (Dollars)",
-        "dollars",
-    )
-    render_reason_outcome_chart(
-        st,
-        historical_df,
-        ["Fraud Approved", "Fraud Denied"],
-        "fraud_reason_code",
-        "Fraud Approved vs Denied by Reason (Dollars)",
-        "dollars",
+        "Requested vs Approved Returns by Reason (Dollars)",
     )
 
     st.markdown("### Next-Level Driver Charts")
-    st.caption("Select a top-level driver to chart the Level 2 sub-reasons contributing to approved loss and denied/prevented exposure.")
+    st.caption("Select a top-level driver to chart the Level 2 sub-reasons behind requested and approved returns.")
     render_driver_drilldown(
         historical_df,
         driver_column="return_reason_code",
         sub_reason_column="return_sub_reason",
-        approved_outcome="Return Approved",
-        denied_outcome="Return Denied",
         title="Return Driver",
         selector_key="historical_return_driver_drilldown",
-    )
-    render_driver_drilldown(
-        historical_df,
-        driver_column="fraud_reason_code",
-        sub_reason_column="fraud_sub_reason",
-        approved_outcome="Fraud Approved",
-        denied_outcome="Fraud Denied",
-        title="Fraud Driver",
-        selector_key="historical_fraud_driver_drilldown",
     )
 
     with st.expander("Show raw filtered data"):
         historical_view = historical_df[
             [
                 "order_id", "customer_id", "actual_outcome", "outcome_type",
-                "return_reason_code", "return_sub_reason", "fraud_label", "fraud_reason_code", "fraud_sub_reason",
-                "customer_return_comment", "customer_dispute_comment",
+                "return_reason_code", "return_sub_reason",
+                "customer_return_comment",
                 "ops_resolution", "ops_resolution_note", "reviewed_by", "reviewed_at",
             ]
         ].head(100)
@@ -1209,12 +1142,11 @@ def render_live_case_feedback_summary(data: pd.DataFrame):
                 "order_id", "risk_type_display", "priority_tier", "recommended_action",
                 "ops_action_taken", "ops_resolution", "ops_resolution_reason",
                 "ops_override_reason", "ops_action_by", "ops_action_note",
-                "fraud_score", "return_risk_score", "risk_reason_summary",
+                "return_risk_score", "risk_reason_summary",
             ]
         ].head(50)
         st.dataframe(
             feedback_view.style.format({
-                "fraud_score": "{:.3f}",
                 "return_risk_score": "{:.3f}",
             }),
             width="stretch",
@@ -1292,16 +1224,6 @@ def apply_ops_action(
                 "return_requested": 1,
                 "return_completed": 0,
             },
-            "Fraud Confirmed": {
-                "outcome_type": "Fraud Confirmed & Blocked",
-                "ops_resolution": "Fraud Confirmed",
-                "fraud_label": "Confirmed",
-            },
-            "Fraud False Positive": {
-                "outcome_type": "Verified & Released",
-                "ops_resolution": "Fraud False Positive",
-                "fraud_label": "False Positive",
-            },
         }
         if final_decision not in resolution_updates:
             raise ValueError(f"Unsupported final decision: {final_decision}")
@@ -1318,9 +1240,7 @@ def apply_ops_action(
             note.strip() or f"Operations recorded {final_decision.lower()} after review."
         )
         risk_type = str(updated.loc[action_mask, "risk_type"].iloc[0])
-        if resolution_reason and risk_type == "Fraud":
-            updated.loc[action_mask, "fraud_reason_code"] = resolution_reason
-        elif resolution_reason and risk_type == "Returns":
+        if resolution_reason and risk_type == "Returns":
             updated.loc[action_mask, "return_reason_code"] = resolution_reason
     return updated
 
@@ -1427,7 +1347,6 @@ def build_dashboard_context(data: pd.DataFrame) -> str:
         data.loc[data["risk_level"] == "High", "order_value"].sum())
     open_cases = int((data["case_status"] == "Open").sum())
     high_priority_cases = int((data["priority_tier"] == "High").sum())
-    fraud_cases = int((data["risk_type_display"] == "Fraud Risk").sum())
     return_cases = int((data["risk_type_display"] == "Return Risk").sum())
     protected_revenue = float(
         data.loc[
@@ -1444,7 +1363,7 @@ def build_dashboard_context(data: pd.DataFrame) -> str:
     )
 
     top_states = (
-        data.groupby("state")["fraud_score"]
+        data.groupby("state")["return_risk_score"]
         .mean()
         .sort_values(ascending=False)
         .head(3)
@@ -1453,10 +1372,10 @@ def build_dashboard_context(data: pd.DataFrame) -> str:
     top_actions = data["recommended_action"].value_counts().head(5)
 
     return f"""
-Aignita Risk Intelligence Dashboard Summary
+Aignita Return Risk Intelligence Dashboard Summary
 
 Total orders: {total_orders}
-Flagged orders: {flagged_orders}
+Flagged for return risk: {flagged_orders}
 Flagged percent: {flagged_pct:.1f}%
 Revenue at risk: ${revenue_at_risk:,.0f}
 Protected revenue: ${protected_revenue:,.0f}
@@ -1464,13 +1383,12 @@ Protected revenue: ${protected_revenue:,.0f}
 Open cases: {open_cases}
 High-priority cases: {high_priority_cases}
 
-Fraud cases: {fraud_cases}
-Return abuse cases: {return_cases}
+Return risk cases: {return_cases}
 
-Top return abuse categories:
+Top return risk categories:
 {top_category.to_string()}
 
-Top fraud states:
+Top return risk states:
 {top_states.to_string()}
 
 Most common actions:
@@ -1487,14 +1405,9 @@ def build_historical_dashboard_context(data: pd.DataFrame) -> str:
     total_orders = len(view)
     actual_returns = int(view["actual_outcome"].eq("Return Approved").sum())
     return_denied = int(view["actual_outcome"].eq("Return Denied").sum())
-    fraud_approved = int(view["actual_outcome"].eq("Fraud Approved").sum())
-    fraud_denied = int(view["actual_outcome"].eq("Fraud Denied").sum())
     total_loss = calculate_historical_total_loss(view)
     avoided_loss = float(
-        view.loc[
-            view["actual_outcome"].isin(["Return Denied", "Fraud Denied"]),
-            "order_value",
-        ].sum()
+        view.loc[view["actual_outcome"].eq("Return Denied"), "order_value"].sum()
     )
 
     return_loss_by_category = (
@@ -1511,16 +1424,9 @@ def build_historical_dashboard_context(data: pd.DataFrame) -> str:
         .sort_values(ascending=False)
         .head(5)
     )
-    fraud_loss_by_state = (
-        view.loc[view["actual_outcome"].eq("Fraud Approved")]
+    return_loss_by_state = (
+        view.loc[view["actual_outcome"].eq("Return Approved")]
         .groupby("state")["order_value"]
-        .sum()
-        .sort_values(ascending=False)
-        .head(5)
-    )
-    fraud_loss_by_payment = (
-        view.loc[view["actual_outcome"].eq("Fraud Approved")]
-        .groupby("payment_method")["order_value"]
         .sum()
         .sort_values(ascending=False)
         .head(5)
@@ -1530,23 +1436,16 @@ def build_historical_dashboard_context(data: pd.DataFrame) -> str:
         .value_counts()
         .head(5)
     )
-    fraud_reasons = (
-        view.loc[view["actual_outcome"].eq("Fraud Approved"), "fraud_reason_code"]
-        .value_counts()
-        .head(5)
-    )
 
     return f"""
-Aignita Risk Intelligence Historical Outcome Summary
+Aignita Return Risk Intelligence Historical Outcome Summary
 
 Completed historical orders: {total_orders}
 Actual approved returns: {actual_returns}
-Denied returns: {return_denied}
-Fraud-approved/released cases: {fraud_approved}
-Fraud denied/blocked cases: {fraud_denied}
+Denied/restricted returns: {return_denied}
 
-Total historical loss from approved returns and fraud-approved orders: ${total_loss:,.0f}
-Avoided exposure from denied returns and denied fraud: ${avoided_loss:,.0f}
+Total historical return loss from approved returns: ${total_loss:,.0f}
+Avoided exposure from denied returns: ${avoided_loss:,.0f}
 
 Approved return loss by product category:
 {return_loss_by_category.to_string()}
@@ -1554,17 +1453,11 @@ Approved return loss by product category:
 Approved return loss by product:
 {return_loss_by_product.to_string()}
 
-Fraud-approved loss by state:
-{fraud_loss_by_state.to_string()}
-
-Fraud-approved loss by payment method:
-{fraud_loss_by_payment.to_string()}
+Approved return loss by state:
+{return_loss_by_state.to_string()}
 
 Top approved return reasons:
 {return_reasons.to_string()}
-
-Top fraud-approved reasons:
-{fraud_reasons.to_string()}
 """
 
 
@@ -1572,20 +1465,15 @@ def build_case_context(case_row: pd.Series | None) -> str:
     if case_row is None:
         return "No selected case context."
 
-    device_risk = case_row.get("device_risk", "Unknown")
-    velocity = case_row.get("velocity_flag", 0)
     lifetime = case_row.get("customer_lifetime_days", 0)
-    addr_mismatch = "Yes" if int(case_row.get("address_mismatch", 0)) else "No"
-    cb_reason = case_row.get("chargeback_reason", "None")
-    cb_won = case_row.get("chargebacks_won", 0)
     action_reason = case_row.get("action_reason", "")
     return_reason = case_row.get("return_reason_code", "None")
     return_comment = case_row.get("customer_return_comment", "")
-    fraud_label = case_row.get("fraud_label", "Unknown")
-    fraud_reason = case_row.get("fraud_reason_code", "None")
-    dispute_comment = case_row.get("customer_dispute_comment", "")
     ops_resolution = case_row.get("ops_resolution", "Pending")
     label_source = case_row.get("label_source", "System")
+    past_orders = int(case_row.get("past_orders", 1))
+    past_returns = int(case_row["past_returns"])
+    return_rate = past_returns / max(past_orders, 1)
 
     return f"""
 Selected Order Case Details
@@ -1602,25 +1490,19 @@ Latest Action Taken: {case_row.get("latest_action_taken", "No action yet")}
 
 Order Value: ${case_row["order_value"]}
 
-Fraud Score: {case_row["fraud_score"]}
 Return Risk Score: {case_row["return_risk_score"]}
-Unified Risk Score: {case_row["unified_risk_score"]}
 
-Behavioral Signals:
-- Device Risk: {device_risk}
-- Order Velocity (last 24h): {velocity} orders from this customer
-- Billing/Shipping Address Mismatch: {addr_mismatch}
-- Past Returns: {case_row["past_returns"]}
-- Chargeback History: {case_row["chargeback_history"]}
-- Chargeback Reason: {cb_reason}
-- Chargebacks Won in Appeals: {cb_won}
+Customer & Return Signals:
+- Past Orders: {past_orders}
+- Past Returns: {past_returns} ({return_rate:.0%} return rate)
+- Discount Used: {"Yes" if int(case_row.get("discount_used", 0)) else "No"}
+- Expedited Shipping: {"Yes" if int(case_row.get("expedited_shipping", 0)) else "No"}
+- Product Category: {case_row["product_category"]}
+- Product Name: {case_row["product_name"]}
 
 Historical / Feedback Signals:
 - Return Reason: {return_reason}
 - Customer Return Comment: {return_comment}
-- Fraud Label: {fraud_label}
-- Fraud Reason: {fraud_reason}
-- Customer Dispute Comment: {dispute_comment}
 - Ops Resolution: {ops_resolution}
 - Label Source: {label_source}
 
@@ -1642,15 +1524,20 @@ def ask_groq(prompt: str, system_prompt: str, max_tokens: int = 600) -> str:
     if groq_client is None:
         return "Groq API key not configured. Add GROQ_API_KEY to your .env file or Streamlit secrets."
 
+    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    # gpt-oss models spend completion tokens on reasoning; keep it light so the answer isn't cut off.
+    extra_body = {"reasoning_effort": "low"} if model.startswith("openai/gpt-oss") else None
+
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.2,
             max_completion_tokens=max_tokens,
+            extra_body=extra_body,
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -1671,9 +1558,9 @@ def ask_risk_copilot(
 
     if is_historical:
         system_prompt = """
-You are Aignita Risk Intelligence Copilot, an AI risk analyst for e-commerce merchants.
+You are Aignita Return Risk Intelligence Copilot, an AI return risk analyst for e-commerce merchants.
 
-You help teams understand historical return and fraud outcomes, actual loss, avoided exposure, reason patterns, and where historical losses occurred.
+You help teams understand historical return outcomes, actual loss from approved returns, avoided exposure from denied returns, reason patterns, and where historical return losses occurred.
 
 Rules:
 - Only use the provided context.
@@ -1685,14 +1572,14 @@ Rules:
 """
     else:
         system_prompt = """
-You are Aignita Risk Intelligence Copilot, an AI risk analyst for e-commerce merchants.
+You are Aignita Return Risk Intelligence Copilot, an AI return risk analyst for e-commerce merchants.
 
-You help risk and operations teams understand portfolio-level fraud risk, return abuse, and what actions to take across the current filtered queue.
+You help risk and operations teams understand portfolio-level return risk, repeat returner patterns, and what actions to take across the current filtered queue.
 
 Rules:
 - Only use the provided context.
 - Be concise, practical, and business-focused.
-- Prioritize open critical cases first.
+- Prioritize open high-priority return risk cases first.
 - Answer at the portfolio level. Do not analyze an individual order unless the dashboard context itself names that order.
 - Do not invent facts not present in the context.
 - Format responses using markdown: use **bold** for key numbers and metrics, and bullet points (- ) for lists.
@@ -1712,14 +1599,14 @@ def ask_case_copilot(question: str, selected_case: pd.Series | None) -> str:
     case_context = build_case_context(selected_case)
 
     system_prompt = """
-You are Aignita Risk Intelligence Case Analyst Assistant.
+You are Aignita Return Risk Intelligence Case Analyst Assistant.
 
-You help fraud and risk analysts investigate a selected case.
+You help returns and risk analysts investigate a selected return risk case.
 
 Rules:
 - Only use the supplied case context.
 - Be concise and operational.
-- Focus on what the analyst should understand and do next.
+- Focus on what the analyst should understand and do next regarding the return risk.
 - Do not invent evidence not present in the context.
 - Format responses using markdown: use **bold** for key numbers and signals, and bullet points (- ) for lists.
 """
@@ -1750,19 +1637,19 @@ def generate_ai_output(
 
     if is_historical:
         system_prompt = """
-You are Aignita Risk Intelligence Copilot.
+You are Aignita Return Risk Intelligence Copilot.
 
-Generate practical historical outcome analysis for risk, finance, operations, and analytics teams.
+Generate practical historical return outcome analysis for risk, finance, operations, and analytics teams.
 Ground everything in the supplied context.
-Use actual outcomes and dollars, not live-risk queue language or model scores.
+Use actual return outcomes and dollars, not live-risk queue language or model scores.
 Do not claim actions were executed.
 Format responses using markdown: use **bold** for key numbers and metrics, and bullet points (- ) for lists.
 """
     else:
         system_prompt = """
-You are Aignita Risk Intelligence Copilot.
+You are Aignita Return Risk Intelligence Copilot.
 
-Generate practical outputs for risk and operations teams.
+Generate practical outputs for returns and operations teams.
 Ground everything in the supplied context.
 Be concrete, concise, and ready to use.
 Do not claim actions were executed.
@@ -1772,27 +1659,27 @@ Format responses using markdown: use **bold** for key numbers and metrics, and b
     if is_historical:
         artifact_prompts = {
             "merchant_summary": """
-Create a short merchant-facing historical outcome summary.
+Create a short merchant-facing historical return outcome summary.
 Include:
-- actual return and fraud outcome situation
-- total historical loss and avoided exposure
-- biggest product/category, state, payment, or reason drivers
+- actual return outcome situation (approved vs denied)
+- total historical return loss and avoided exposure
+- biggest product/category, state, or return reason drivers
 - what the merchant should learn from the historical period
 Use plain business language.
 """,
             "policy_recommendation": """
-Write a short policy recommendation memo based on historical outcomes.
-Focus on reducing approved return loss and fraud-approved loss.
+Write a short policy recommendation memo based on historical return outcomes.
+Focus on reducing approved return loss.
 Include:
-- 3 recommended policy or operational changes
+- 3 recommended return policy or operational changes
 - expected benefit
 - possible customer or operational tradeoff
 """,
             "merchant_action_brief": """
-Create a merchant-facing historical outcome brief.
+Create a merchant-facing historical return outcome brief.
 Include:
 - what actually happened in the historical period
-- top return-loss and fraud-loss drivers
+- top return-loss drivers (category, product, state, reason)
 - total loss and avoided exposure
 - one operational next step and one analytics/model-learning next step
 Avoid live queue language and do not discuss open case prioritization.
@@ -1801,52 +1688,52 @@ Avoid live queue language and do not discuss open case prioritization.
 Historical mode does not generate customer verification drafts. Explain that this artifact is only available for selected live cases.
 """,
             "ops_action_plan": """
-Historical mode does not create live case action plans. Create a short historical operations improvement plan instead.
+Historical mode does not create live case action plans. Create a short historical returns operations improvement plan instead.
 Include:
-- what policies should be reviewed
-- what data labels or reason codes should be improved
+- what return policies should be reviewed
+- what return reason codes or data labels should be improved
 - what teams should monitor next period
 """,
         }
     else:
         artifact_prompts = {
         "merchant_summary": """
-Create a short merchant-facing risk summary for the current dashboard view.
+Create a short merchant-facing return risk summary for the current dashboard view.
 Include:
-- current risk situation
-- biggest fraud/return risk drivers
+- current return risk situation
+- biggest return risk drivers (categories, products, states)
 - revenue at risk vs protected revenue
 - what should be prioritized next
 Use plain business language.
 """,
         "policy_recommendation": """
 Write a short policy recommendation memo for the merchant based on the dashboard context.
-Focus on return risk and fraud controls.
+Focus on return risk controls and repeat returner management.
 Include:
-- 3 recommended policy changes
+- 3 recommended return policy changes
 - expected benefit
-- possible tradeoff
+- possible customer or operational tradeoff
 """,
         "customer_verification_draft": """
-Draft a customer verification message for the selected case.
+Draft a customer return verification message for the selected case.
 Tone: polite, professional, non-accusatory.
-Ask for only the minimum needed verification.
+Ask for only the minimum needed verification (e.g. item condition, photo, return reason).
 If no selected case exists, say that a selected case is required.
 """,
         "ops_action_plan": """
-Create a short ops action plan for the selected case.
+Create a short ops action plan for the selected return risk case.
 Include:
-- what the analyst should review first
+- what the analyst should review first (return history, product category, reason)
 - what evidence matters most
-- whether the case should be escalated, verified, monitored, or closed
+- whether the case should be escalated, inspected, restricted, or approved
 Keep it practical and concise.
 """,
         "merchant_action_brief": """
-Create a merchant-facing action brief for the current dashboard view.
+Create a merchant-facing action brief for the current return risk dashboard view.
 Include:
-- current risk situation in plain business language
+- current return risk situation in plain business language
 - top 3 actions the merchant should take today
-- which order groups, product categories, locations, or actions are driving risk
+- which order groups, product categories, or states are driving return risk
 - revenue at risk and protected revenue
 - one operational next step and one policy next step
 Avoid technical model language and do not claim actions were executed.
@@ -2136,7 +2023,7 @@ top_category = safe_top_index(
 )
 
 top_state = safe_top_index(
-    filtered_df.groupby("state")["fraud_score"]
+    filtered_df.groupby("state")["return_risk_score"]
     .mean()
     .sort_values(ascending=False)
 )
@@ -2156,22 +2043,22 @@ if work_mode == "Historical Intelligence":
 else:
     render_hero_summary(metrics, top_category, top_state)
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
 if work_mode == "Historical Intelligence":
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     historical_kpis = build_historical_kpis(filtered_df)
     c1.metric("Total Historical Orders", f'{metrics["total_orders"]:,}')
-    c2.metric("Actual Returns", f'{historical_kpis["actual_returns"]:,}')
-    c3.metric("Actual Return Rate", f'{historical_kpis["actual_return_rate"]:.1f}%')
-    c4.metric("Confirmed Fraud", f'{historical_kpis["confirmed_fraud"]:,}')
-    c5.metric("Confirmed Fraud Rate", f'{historical_kpis["confirmed_fraud_rate"]:.1f}%')
-    c6.metric("Total Loss", format_currency(calculate_historical_total_loss(filtered_df)))
+    c2.metric("Return Requests", f'{historical_kpis["return_requests"]:,}')
+    c3.metric("Return Request Rate", f'{historical_kpis["return_request_rate"]:.1f}%')
+    c4.metric("Approved Returns", f'{historical_kpis["approved_returns"]:,}')
+    c5.metric("Approved Return Rate", f'{historical_kpis["approved_return_rate"]:.1f}%')
+    c6.metric("Approved Return Value", format_currency(historical_kpis["approved_return_value"]))
 else:
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("New / Open Orders", f'{metrics["total_orders"]:,}')
-    c2.metric("Predicted Flagged", f'{metrics["flagged_orders"]:,}')
-    c3.metric("Predicted Flagged %", f'{metrics["flagged_pct"]:.1f}%')
-    c4.metric("Predicted Fraud Cases", f'{metrics["fraud_cases"]:,}')
-    c5.metric("Predicted Return Cases", f'{metrics["return_cases"]:,}')
-    c6.metric("Revenue at Risk", format_currency(metrics["revenue_at_risk"]))
+    c2.metric("Flagged for Return Risk", f'{metrics["flagged_orders"]:,}')
+    c3.metric("Return Risk Rate", f'{metrics["flagged_pct"]:.1f}%')
+    c4.metric("High Priority Cases", f'{metrics["high_cases"]:,}')
+    c5.metric("Revenue at Risk", format_currency(metrics["revenue_at_risk"]))
 
 if work_mode == "Live Risk Queue":
     today_actions = build_today_actions(filtered_df, metrics, top_category, top_state)
@@ -2180,15 +2067,17 @@ if work_mode == "Live Risk Queue":
 st.markdown("---")
 
 if work_mode == "Historical Intelligence":
-    tab_ov, tab_cp, tab_fr, tab_rt, tab_model = st.tabs(
-        ["Overview", "Risk Copilot", "Fraud Outcomes", "Return Outcomes", "Model Learning"]
+    tab_ov, tab_cp, tab_rt, tab_model = st.tabs(
+        ["Overview", "Return Risk Copilot", "Return Outcomes", "Model Learning"]
     )
     tab_rq = None
+    tab_fr = None
 else:
-    tab_ov, tab_cp, tab_rq, tab_fr, tab_rt = st.tabs(
-        ["Overview", "Risk Copilot", "Review Queue", "Fraud Risk", "Return Risk"]
+    tab_ov, tab_cp, tab_rq, tab_rt = st.tabs(
+        ["Overview", "Return Risk Copilot", "Review Queue", "Return Risk"]
     )
     tab_model = None
+    tab_fr = None
 
 # ── Tab 1: Overview ──────────────────────────────────────────────────────────────
 
@@ -2228,23 +2117,22 @@ with tab_ov:
                 width="stretch"
             )
 
-        loss_exposure = (
-            filtered_df[filtered_df["risk_type_display"].isin(["Fraud Risk", "Return Risk"])]
-            .groupby("risk_type_display", as_index=False)["order_value"]
+        return_by_category = (
+            filtered_df[filtered_df["risk_type_display"] == "Return Risk"]
+            .groupby("product_category", as_index=False)["order_value"]
             .sum()
             .sort_values("order_value", ascending=False)
         )
 
-        if loss_exposure.empty:
-            col2.info("No loss exposure data available for the selected filters.")
+        if return_by_category.empty:
+            col2.info("No return risk data available for the selected filters.")
         else:
             col2.plotly_chart(
                 style_chart(px.bar(
-                    loss_exposure, x="risk_type_display", y="order_value",
-                    title="Loss Exposure by Risk Type",
-                    labels={"risk_type_display": "Risk Type", "order_value": "Loss Exposure ($)"},
-                    color="risk_type_display",
-                    color_discrete_map=RISK_TYPE_COLORS,
+                    return_by_category, x="product_category", y="order_value",
+                    title="Return Risk Revenue by Category",
+                    labels={"product_category": "Category", "order_value": "Revenue at Risk ($)"},
+                    color_discrete_sequence=["#d97706"],
                 ), showlegend=False),
                 width="stretch"
             )
@@ -2312,143 +2200,6 @@ with tab_ov:
 
     with st.expander("Show raw filtered data"):
         st.dataframe(filtered_df.head(200), width="stretch")
-
-# ── Tab 3: Fraud Risk ─────────────────────────────────────────────────────────────
-
-with tab_fr:
-    log_once("tab_fraudiq_seen", "tab_view", {"tab": "Fraud Risk"})
-    st.subheader("Fraud Outcomes" if work_mode == "Historical Intelligence" else "Fraud Risk")
-    fraud_df = filtered_df[filtered_df["risk_type_display"] == "Fraud Risk"].copy()
-
-    if fraud_df.empty:
-        st.warning(
-            "No fraud-tagged transactions in the current filter selection.")
-    elif work_mode == "Historical Intelligence":
-        fraud_df["actual_outcome"] = fraud_df.apply(simplify_actual_outcome, axis=1)
-        fraud_loss = float(fraud_df.loc[fraud_df["actual_outcome"].eq("Fraud Approved"), "order_value"].sum())
-        fraud_prevented = float(fraud_df.loc[fraud_df["actual_outcome"].eq("Fraud Denied"), "order_value"].sum())
-        confirmed_fraud = int(fraud_df["actual_outcome"].eq("Fraud Denied").sum())
-
-        fc1, fc2, fc3, fc4 = st.columns(4)
-        fc1.metric("Fraud Reviewed", f"{len(fraud_df):,}")
-        fc2.metric("Fraud Approved Loss", format_currency(fraud_loss))
-        fc3.metric("Fraud Denied Prevented", format_currency(fraud_prevented))
-        fc4.metric("Fraud Denied Cases", f"{confirmed_fraud:,}")
-
-        fcol1, fcol2 = st.columns(2)
-        fraud_loss_by_state = (
-            fraud_df[fraud_df["actual_outcome"].eq("Fraud Approved")]
-            .groupby("state", as_index=False)["order_value"]
-            .sum()
-            .sort_values("order_value", ascending=False)
-            .head(10)
-        )
-        fraud_loss_by_payment = (
-            fraud_df[fraud_df["actual_outcome"].eq("Fraud Approved")]
-            .groupby("payment_method", as_index=False)["order_value"]
-            .sum()
-            .sort_values("order_value", ascending=False)
-            .head(10)
-        )
-
-        fcol1.plotly_chart(
-            style_chart(px.bar(
-                fraud_loss_by_state,
-                x="state",
-                y="order_value",
-                title="Fraud Approved Loss by State",
-                labels={"state": "State", "order_value": "Approved Loss"},
-                color_discrete_sequence=["#0ea5e9"],
-            ), x_tickangle=-25),
-            width="stretch",
-        )
-        fcol2.plotly_chart(
-            style_chart(px.bar(
-                fraud_loss_by_payment,
-                x="payment_method",
-                y="order_value",
-                title="Fraud Approved Loss by Payment Method",
-                labels={"payment_method": "Payment Method", "order_value": "Approved Loss"},
-                color_discrete_sequence=["#0ea5e9"],
-            ), x_tickangle=-25),
-            width="stretch",
-        )
-
-        fraud_view = fraud_df[
-            [
-                "order_id", "customer_id", "order_date", "actual_outcome",
-                "fraud_reason_code", "fraud_reason_text", "customer_dispute_comment",
-                "order_value", "state", "payment_method", "ops_resolution_note",
-            ]
-        ].sort_values(["actual_outcome", "order_value"], ascending=[True, False]).head(50)
-
-        st.dataframe(
-            fraud_view.style.format({"order_value": "${:,.2f}"}),
-            width="stretch",
-            hide_index=True,
-        )
-    else:
-        fc1, fc2, fc3, fc4 = st.columns(4)
-        fc1.metric("Fraud Cases", f"{len(fraud_df):,}")
-        fc2.metric("Fraud Risk Revenue", format_currency(
-            fraud_df["order_value"].sum()))
-        fc3.metric(
-            "Top Fraud State",
-            safe_top_index(
-                fraud_df.groupby("state")["fraud_score"].mean(
-                ).sort_values(ascending=False)
-            )
-        )
-        fc4.metric(
-            "Top Fraud Payment Method",
-            safe_top_index(
-                fraud_df.groupby("payment_method")[
-                    "fraud_score"].mean().sort_values(ascending=False)
-            )
-        )
-
-        fcol1, fcol2 = st.columns(2)
-
-        fraud_by_state = fraud_df.groupby("state", as_index=False)[
-            "fraud_score"].mean().sort_values("fraud_score", ascending=False)
-        fraud_by_payment = fraud_df.groupby("payment_method", as_index=False)[
-            "fraud_score"].mean().sort_values("fraud_score", ascending=False)
-
-        fcol1.plotly_chart(
-            style_chart(px.bar(
-                fraud_by_state, x="state", y="fraud_score",
-                title="Average Fraud Score by State",
-                labels={"state": "State", "fraud_score": "Average Fraud Score"},
-                color_discrete_sequence=["#2563eb"],
-            )),
-            width="stretch"
-        )
-        fcol2.plotly_chart(
-            style_chart(px.bar(
-                fraud_by_payment, x="payment_method", y="fraud_score",
-                title="Average Fraud Score by Payment Method",
-                labels={"payment_method": "Payment Method", "fraud_score": "Average Fraud Score"},
-                color_discrete_sequence=["#2563eb"],
-            ), x_tickangle=-15),
-            width="stretch"
-        )
-
-        fraud_view = fraud_df[
-            [
-                "order_id", "customer_id", "order_date", "state", "payment_method",
-                "order_value", "fraud_score", "priority_tier", "case_status",
-                "workflow_stage", "latest_action_taken", "risk_reason_summary", "recommended_action",
-                "ai_agent_next_step"
-            ]
-        ].sort_values(["fraud_score", "order_value"], ascending=[False, False]).head(50)
-
-        st.dataframe(
-            fraud_view.style.format({
-                "order_value": "${:,.2f}",
-                "fraud_score": "{:.3f}",
-            }),
-            width="stretch"
-        )
 
 # ── Tab 4: Return Risk ───────────────────────────────────────────────────────────
 
@@ -2674,7 +2425,7 @@ if tab_rq is not None:
         with st.expander("Show open cases", expanded=False):
             open_case_view = flagged_df[
                 [
-                    "order_id", "customer_id", "order_value", "unified_risk_score",
+                    "order_id", "customer_id", "order_value", "return_risk_score",
                     "risk_type_display", "priority_tier", "workflow_stage",
                     "recommended_action", "latest_action_taken", "risk_reason_summary",
                 ]
@@ -2683,7 +2434,7 @@ if tab_rq is not None:
             st.dataframe(
                 open_case_view.style.format({
                     "order_value": "${:,.2f}",
-                    "unified_risk_score": "{:.3f}",
+                    "return_risk_score": "{:.3f}",
                 }),
                 width="stretch"
             )
@@ -2708,46 +2459,43 @@ if tab_rq is not None:
         dc1, dc2, dc3, dc4 = st.columns(4)
         dc1.metric("Order Value", format_currency(
             float(selected_case["order_value"])))
-        dc2.metric("Unified Risk Score",
-                   f'{float(selected_case["unified_risk_score"]):.3f}')
+        dc2.metric("Return Risk Score",
+                   f'{float(selected_case["return_risk_score"]):.3f}')
         dc3.metric("Priority", str(selected_case["priority_tier"]))
         dc4.metric("Case Status", str(selected_case["case_status"]))
 
         render_case_detail_box(selected_case)
 
         with st.expander("Case signals and timeline", expanded=False):
-            st.markdown("#### Risk Signals")
-            signal_col1, signal_col2, signal_col3, signal_col4, signal_col5 = st.columns(5)
-            signal_col1.metric(
-                "Fraud Score", f'{float(selected_case["fraud_score"]):.3f}')
-            signal_col2.metric("Return Risk Score",
+            st.markdown("#### Return Risk Signals")
+            signal_col1, signal_col2, signal_col3, signal_col4 = st.columns(4)
+            signal_col1.metric("Return Risk Score",
                                f'{float(selected_case["return_risk_score"]):.3f}')
-            signal_col3.metric("Unified Risk Score",
-                               f'{float(selected_case["unified_risk_score"]):.3f}')
-            signal_col4.metric(
+            signal_col2.metric(
                 "Past Returns", f'{int(selected_case["past_returns"])}')
-            signal_col5.metric("Chargeback History",
-                               f'{int(selected_case["chargeback_history"])}')
+            signal_col3.metric(
+                "Past Orders", f'{int(selected_case.get("past_orders", 1))}')
+            signal_col4.metric("Customer Lifetime",
+                               f'{int(selected_case.get("customer_lifetime_days", 0))} days')
 
-            st.markdown("#### Behavioral Signals")
+            st.markdown("#### Purchase Signals")
             bsig1, bsig2, bsig3, bsig4, bsig5 = st.columns(5)
-            bsig1.metric("Device Risk", str(selected_case.get("device_risk", "Unknown")))
-            bsig2.metric("Order Velocity (24h)", f'{int(selected_case.get("velocity_flag", 0))} orders')
-            bsig3.metric("Customer Lifetime", f'{int(selected_case.get("customer_lifetime_days", 0))} days')
-            bsig4.metric("Address Mismatch", "Yes" if int(selected_case.get("address_mismatch", 0)) else "No")
-            bsig5.metric("Chargeback Reason", str(selected_case.get("chargeback_reason", "None")))
+            bsig1.metric("Product Category", str(selected_case.get("product_category", "Unknown")))
+            bsig2.metric("Product Name", str(selected_case.get("product_name", "Unknown")))
+            bsig3.metric("Order Value", format_currency(float(selected_case["order_value"])))
+            bsig4.metric("Discount Used", "Yes" if int(selected_case.get("discount_used", 0)) else "No")
+            bsig5.metric("Expedited Shipping", "Yes" if int(selected_case.get("expedited_shipping", 0)) else "No")
 
-            st.markdown("#### Lifecycle Intelligence")
+            st.markdown("#### Return Intelligence")
             lint1, lint2, lint3, lint4, lint5 = st.columns(5)
             lint1.metric("Return Reason", str(selected_case.get("return_reason_code", "None")))
-            lint2.metric("Fraud Label", str(selected_case.get("fraud_label", "Unknown")))
+            lint2.metric("Return Sub Reason", str(selected_case.get("return_sub_reason", "None")))
             lint3.metric("Label Source", str(selected_case.get("label_source", "System")))
             lint4.metric("Label Confidence", f'{float(selected_case.get("label_confidence", 0.0)):.2f}')
             lint5.metric("Ops Resolution", str(selected_case.get("ops_resolution", "Pending")))
             st.caption(str(selected_case.get("ops_resolution_note", "")))
             comments = [
                 str(selected_case.get("customer_return_comment", "")).strip(),
-                str(selected_case.get("customer_dispute_comment", "")).strip(),
                 str(selected_case.get("ops_action_note", "")).strip(),
                 str(selected_case.get("ops_override_reason", "")).strip(),
             ]
@@ -2765,11 +2513,11 @@ if tab_rq is not None:
             st.markdown("#### Ask About This Case")
             case_sample_cols = st.columns(3)
             if case_sample_cols[0].button("Why was this case flagged?"):
-                st.session_state["case_question"] = "Why was this case flagged?"
+                st.session_state["case_question"] = "Why was this case flagged for return risk?"
             if case_sample_cols[1].button("What should I do next?"):
                 st.session_state["case_question"] = "What should I do next on this case?"
-            if case_sample_cols[2].button("Is verification needed?"):
-                st.session_state["case_question"] = "Is customer verification needed for this case?"
+            if case_sample_cols[2].button("Should we restrict this return?"):
+                st.session_state["case_question"] = "Should we restrict or approve this return?"
 
             case_question = st.text_input(
                 "Ask about the selected case",
@@ -2965,170 +2713,211 @@ if tab_model is not None:
     log_once("tab_model_learning_seen", "tab_view", {"tab": "Model Learning"})
     st.subheader("Model Learning")
     st.markdown(
-        "Analytics leaders can turn historical outcome patterns into model guidance, policy proposals, and future training signals."
+        "What the outcomes teach us: where the model missed, which return patterns need which fix, "
+        "and whether the actions already taken worked."
     )
 
-    learning_df = filtered_df.copy()
-    learning_df["actual_outcome"] = learning_df.apply(simplify_actual_outcome, axis=1)
-    approved_return_df = learning_df[learning_df["actual_outcome"].eq("Return Approved")]
-    approved_fraud_df = learning_df[learning_df["actual_outcome"].eq("Fraud Approved")]
-    denied_df = learning_df[learning_df["actual_outcome"].isin(["Return Denied", "Fraud Denied"])]
-
-    total_loss = calculate_historical_total_loss(learning_df)
-    avoided_loss = float(denied_df["order_value"].sum())
+    learning_df = prepare_learning_frame(filtered_df)
     if "historical_model_insights" not in st.session_state:
         st.session_state["historical_model_insights"] = load_learning_backlog("historical")
-    injected_insights = st.session_state["historical_model_insights"]
+
+    learning_kpis = compute_learning_kpis(learning_df)
+    patterns = find_return_patterns(learning_df)
+    misses = summarize_model_misses(learning_df)
+    interventions = measure_interventions(learning_df)
+    resolved_patterns = int(patterns["status"].eq("Resolved").sum()) if not patterns.empty else 0
 
     ml1, ml2, ml3, ml4 = st.columns(4)
-    ml1.metric("Loss To Learn From", format_currency(total_loss))
-    ml2.metric("Avoided Exposure", format_currency(avoided_loss))
-    ml3.metric("Outcome Labels", f"{len(learning_df):,}")
-    ml4.metric("Injected Insights", f"{len(injected_insights):,}")
-
-    category_opportunities = (
-        approved_return_df.groupby("product_category", as_index=False)
-        .agg(
-            approved_loss=("order_value", "sum"),
-            approved_returns=("order_id", "count"),
-            avg_return_score=("return_risk_score", "mean"),
-        )
-        .sort_values("approved_loss", ascending=False)
-        .head(8)
+    ml1.metric("Return Requests", f'{learning_kpis["return_requests"]:,}')
+    ml2.metric(
+        "Missed by Model",
+        format_currency(learning_kpis["missed_value"]),
+        delta=f'{learning_kpis["missed_returns"]:,} returns not flagged',
+        delta_color="off",
     )
-    if not category_opportunities.empty:
-        category_opportunities["signal"] = "product_category = " + category_opportunities["product_category"].astype(str)
-        category_opportunities["suggested_guidance"] = "Be stricter"
-        category_opportunities["priority"] = "High"
-        category_opportunities["model_signal"] = (
-            "product_category:" + category_opportunities["product_category"].astype(str) + ":stricter_return_review"
-        )
-    payment_opportunities = (
-        approved_fraud_df.groupby("payment_method", as_index=False)
-        .agg(
-            approved_loss=("order_value", "sum"),
-            approved_fraud=("order_id", "count"),
-            avg_fraud_score=("fraud_score", "mean"),
-        )
-        .sort_values("approved_loss", ascending=False)
-        .head(8)
+    ml3.metric(
+        "Patterns Found",
+        f"{len(patterns):,}",
+        delta=f"{resolved_patterns} resolved",
+        delta_color="off",
     )
-    if not payment_opportunities.empty:
-        payment_opportunities["signal"] = "payment_method = " + payment_opportunities["payment_method"].astype(str)
-        payment_opportunities["suggested_guidance"] = "Require manual review"
-        payment_opportunities["priority"] = "High"
-        payment_opportunities["model_signal"] = (
-            "payment_method:" + payment_opportunities["payment_method"].astype(str) + ":manual_fraud_review"
-        )
+    ml4.metric("Backlog Items", f'{len(st.session_state["historical_model_insights"]):,}')
 
-    st.markdown("### Suggested Learning Opportunities")
-    return_learning = category_opportunities.rename(columns={
-        "product_category": "where",
-        "approved_returns": "cases",
-        "avg_return_score": "avg_historical_score",
-    })
-    fraud_learning = payment_opportunities.rename(columns={
-        "payment_method": "where",
-        "approved_fraud": "cases",
-        "avg_fraud_score": "avg_historical_score",
-    })
-    return_learning["focus_area"] = "Returns"
-    fraud_learning["focus_area"] = "Fraud"
-    suggested_learning = pd.concat([return_learning, fraud_learning], ignore_index=True)
-    if suggested_learning.empty:
-        st.info("No suggested learning opportunities are available for the current filters.")
+    # 1. Intervention impact
+    st.markdown("### Did the Actions Work?")
+    if not interventions:
+        st.info("No interventions fall inside the current filter range.")
     else:
-        suggested_learning = suggested_learning.sort_values("approved_loss", ascending=False)
+        st.caption("Each action compared over the 90 days before and after it, for the segment it targeted.")
+        for item in interventions:
+            st.markdown(
+                f"**{item['label']}** · {pd.Timestamp(item['date']):%b %d, %Y} · "
+                f"`{item['field']} = {item['value']}`"
+            )
+            ic1, ic2, ic3 = st.columns(3)
+            ic1.metric(
+                f"{item['metric_label']} (after)",
+                f"{item['after_value']:.0%}",
+                delta=f"{(item['after_value'] - item['before_value']) * 100:+.0f} pts vs {item['before_value']:.0%} before",
+                delta_color="inverse",
+            )
+            ic2.metric(
+                "Approved return value / month (after)",
+                format_currency(item["after_loss_per_month"]),
+                delta=f"{format_currency(item['after_loss_per_month'] - item['before_loss_per_month'])} vs before",
+                delta_color="inverse",
+            )
+            ic3.metric("Orders compared", f"{item['before_orders']:,} → {item['after_orders']:,}")
+
+    # 2. Emerging patterns
+    st.markdown("### Return Patterns and Recommended Fix")
+    st.caption(
+        "Segments returning at least 1.3x the baseline rate. The pattern type decides the fix: a product issue "
+        "goes to Merchandising, abuse goes to stricter policy. Status compares the last 3 months with the 3 before."
+    )
+    if patterns.empty:
+        st.info("No segment is returning meaningfully above baseline in the current filters.")
+    else:
+        pattern_view = patterns.assign(
+            status_change=patterns.apply(
+                lambda r: (
+                    f"{METRIC_LABELS[r['status_metric']]}: "
+                    + ("–" if pd.isna(r["prior_value"]) else f"{r['prior_value']:.0%}")
+                    + " → "
+                    + ("–" if pd.isna(r["recent_value"]) else f"{r['recent_value']:.0%}")
+                ),
+                axis=1,
+            )
+        )
         st.dataframe(
-            suggested_learning[
+            pattern_view[
                 [
-                    "focus_area", "signal", "approved_loss", "cases",
-                    "avg_historical_score", "suggested_guidance", "priority", "model_signal",
+                    "pattern_type", "dimension", "value", "status", "status_change", "return_rate", "lift",
+                    "dominant_reason", "approval_rate", "repeat_returner_share", "approved_value",
+                    "guidance", "owner",
                 ]
             ].style.format({
-                "approved_loss": "${:,.2f}",
-                "avg_historical_score": "{:.3f}",
+                "return_rate": "{:.0%}",
+                "lift": "{:.1f}x",
+                "approval_rate": "{:.0%}",
+                "repeat_returner_share": "{:.0%}",
+                "approved_value": "${:,.0f}",
             }),
             width="stretch",
             hide_index=True,
         )
 
-    st.markdown("### Inject Analytics Guidance")
-    with st.form("historical_model_insight_form"):
+    # 3. Model misses
+    st.markdown("### Where the Model Missed")
+    st.caption(
+        "Missed = returns the model did not flag. Flagged-but-approved = returns the model flagged that ops "
+        "approved anyway, which adds friction for genuine customers."
+    )
+    if misses.empty:
+        st.info("No return requests in the current filters.")
+    else:
+        st.dataframe(
+            misses.style.format({
+                "missed_value": "${:,.0f}",
+                "miss_rate": "{:.0%}",
+                "flagged_approval_rate": "{:.0%}",
+            }),
+            width="stretch",
+            hide_index=True,
+        )
+
+    # 4. Backlog
+    st.markdown("### Add to Learning Backlog")
+    candidates = build_backlog_candidates(patterns, misses)
+    existing_signals = {item.get("model_signal") for item in st.session_state["historical_model_insights"]}
+    open_candidates = [c for c in candidates if c["model_signal"] not in existing_signals]
+    if not open_candidates:
+        st.caption("Every suggestion above is already in the backlog.")
+    else:
+        selected_labels = st.multiselect(
+            "Suggested items",
+            [c["label"] for c in open_candidates],
+            help="Each item carries its rationale, owner, priority, and model-ready signal.",
+        )
+        if st.button("Add Selected to Backlog", disabled=not selected_labels):
+            created_at = datetime.now(timezone.utc).isoformat()
+            for candidate in open_candidates:
+                if candidate["label"] in selected_labels:
+                    insight = {"created_at": created_at, **{k: v for k, v in candidate.items() if k != "label"}}
+                    st.session_state["historical_model_insights"].insert(0, insight)
+                    log_event("historical_model_insight_added", insight)
+            save_learning_backlog("historical", st.session_state["historical_model_insights"])
+            st.session_state["learning_backlog_notice"] = (
+                f"Added {len(selected_labels)} item(s) to the learning backlog."
+            )
+            st.rerun()
+
+    with st.expander("Add custom guidance"):
         form_col1, form_col2, form_col3 = st.columns(3)
         focus_area = form_col1.selectbox(
-            "Focus area",
-            ["Returns", "Fraud", "Customer Policy", "Review Workflow"],
+            "Focus area", ["Returns", "Customer Policy", "Review Workflow"], key="custom_focus_area"
         )
         condition_field = form_col2.selectbox(
             "Where this applies",
-            ["product_category", "product_name", "state", "payment_method", "return_reason_code", "fraud_reason_code"],
+            ["product_name", "product_category", "state", "payment_method", "return_reason_code", "customer_segment"],
+            key="custom_condition_field",
         )
-        field_options = sorted(
-            [str(value) for value in learning_df[condition_field].dropna().unique().tolist()]
-        )
-        condition_value = form_col3.selectbox("Value", field_options)
+        field_options = sorted(str(value) for value in learning_df[condition_field].dropna().unique())
+        condition_value = form_col3.selectbox("Value", field_options, key="custom_condition_value")
 
         form_col4, form_col5, form_col6 = st.columns(3)
         guidance_type = form_col4.selectbox(
             "Guidance",
-            ["Be stricter", "Be more lenient", "Monitor closely", "Require manual review", "Adjust threshold"],
+            ["Be stricter", "Be more lenient", "Fix product / sizing info", "Monitor closely",
+             "Require manual review", "Adjust threshold"],
+            key="custom_guidance",
         )
-        priority = form_col5.selectbox("Priority", ["High", "Medium", "Low"])
-        owner = form_col6.selectbox("Owner", ["Analytics", "Risk Ops", "Returns Ops", "Fraud Ops", "CX"])
-
+        priority = form_col5.selectbox("Priority", ["High", "Medium", "Low"], key="custom_priority")
+        owner = form_col6.selectbox(
+            "Owner", ["Analytics", "Risk Ops", "Returns Ops", "Merchandising", "CX"], key="custom_owner"
+        )
         rationale = st.text_area(
             "Analytics rationale",
-            value=(
-                f"Historical outcomes show elevated loss for {condition_field} = {condition_value}. "
-                "Use this as a candidate policy/model signal for future scoring."
-            ),
-            height=90,
+            value=f"Historical outcomes show elevated returns for {condition_field} = {condition_value}.",
+            height=80,
         )
         proposed_signal = st.text_input(
             "Model-ready signal",
-            value=f"{condition_field}:{condition_value}:{guidance_type.lower().replace(' ', '_')}",
+            value=f"{condition_field}:{condition_value}:{guidance_type.lower().replace(' / ', '_').replace(' ', '_')}",
         )
-        submit_insight = st.form_submit_button("Add Insight To Learning Backlog")
+        if st.button("Add Custom Guidance to Backlog"):
+            insight = {
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "focus_area": focus_area,
+                "condition_field": condition_field,
+                "condition_value": condition_value,
+                "guidance": guidance_type,
+                "priority": priority,
+                "owner": owner,
+                "model_signal": proposed_signal,
+                "rationale": rationale,
+                "source": "Analyst",
+            }
+            st.session_state["historical_model_insights"].insert(0, insight)
+            save_learning_backlog("historical", st.session_state["historical_model_insights"])
+            log_event("historical_model_insight_added", insight)
+            st.session_state["learning_backlog_notice"] = "Custom guidance added to the learning backlog."
+            st.rerun()
 
-    if submit_insight:
-        insight = {
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "focus_area": focus_area,
-            "condition_field": condition_field,
-            "condition_value": condition_value,
-            "guidance": guidance_type,
-            "priority": priority,
-            "owner": owner,
-            "model_signal": proposed_signal,
-            "rationale": rationale,
-        }
-        st.session_state["historical_model_insights"].insert(0, insight)
-        save_learning_backlog("historical", st.session_state["historical_model_insights"])
-        log_event("historical_model_insight_added", insight)
-        st.success("Insight added to the model learning backlog.")
-
-    backlog = pd.DataFrame(st.session_state.get("historical_model_insights", []))
     st.markdown("### Model Learning Backlog")
+    notice = st.session_state.pop("learning_backlog_notice", None)
+    if notice:
+        st.success(notice)
+    backlog = pd.DataFrame(st.session_state.get("historical_model_insights", []))
     if backlog.empty:
-        starter_backlog = suggested_learning.head(5).copy() if "suggested_learning" in locals() else pd.DataFrame()
-        if starter_backlog.empty:
-            st.info("No learning backlog yet. Add an analytics insight above.")
-        else:
-            st.dataframe(
-                starter_backlog[
-                    [
-                        "focus_area", "signal", "approved_loss", "cases",
-                        "suggested_guidance", "priority", "model_signal",
-                    ]
-                ].style.format({
-                    "approved_loss": "${:,.2f}",
-                }),
-                width="stretch",
-                hide_index=True,
-            )
+        st.info("The backlog is empty. Add suggested items or custom guidance above.")
     else:
-        st.dataframe(backlog, width="stretch", hide_index=True)
+        backlog_columns = [
+            c for c in ["priority", "guidance", "condition_field", "condition_value", "owner",
+                        "model_signal", "rationale", "source", "created_at"]
+            if c in backlog.columns
+        ]
+        st.dataframe(backlog[backlog_columns], width="stretch", hide_index=True)
         st.download_button(
             "Download Learning Backlog CSV",
             data=to_csv_download(backlog),
@@ -3143,7 +2932,7 @@ with tab_cp:
     log_once("tab_ai_copilot_seen", "tab_view", {"tab": "Risk Copilot"})
     st.subheader("Risk Copilot")
     if work_mode == "Historical Intelligence":
-        st.markdown("Use Copilot to ask about **actual historical outcomes**, **approved return loss**, **fraud-approved loss**, avoided exposure, and policy lessons from the completed period.")
+        st.markdown("Use Copilot to ask about **actual historical outcomes**, **approved return loss**, avoided exposure, and policy lessons from the completed period.")
     else:
         st.markdown("Use Copilot to **ask broader portfolio questions** and **generate merchant-ready outputs** for risk, policy, and operations workflows. For order-specific investigation, use **Review Queue**.")
 
@@ -3154,14 +2943,14 @@ with tab_cp:
             st.session_state["copilot_question"] = "Summarize the historical outcomes."
         if sample_cols[1].button("Return loss drivers"):
             st.session_state["copilot_question"] = "Which categories and products drove approved return loss?"
-        if sample_cols[2].button("Fraud loss drivers"):
-            st.session_state["copilot_question"] = "Which states and payment methods drove fraud-approved loss?"
+        if sample_cols[2].button("Top return states"):
+            st.session_state["copilot_question"] = "Which states drove the highest approved return loss?"
 
         sample_cols2 = st.columns(3)
         if sample_cols2[0].button("Total loss"):
             st.session_state["copilot_question"] = "How much total historical loss occurred?"
         if sample_cols2[1].button("Avoided exposure"):
-            st.session_state["copilot_question"] = "How much exposure was avoided through denied returns and denied fraud?"
+            st.session_state["copilot_question"] = "How much exposure was avoided through denied returns?"
         if sample_cols2[2].button("Policy lessons"):
             st.session_state["copilot_question"] = "What policy lessons should we take from the historical outcomes?"
     else:
@@ -3170,8 +2959,8 @@ with tab_cp:
             st.session_state["copilot_question"] = "Summarize the current risk situation."
         if sample_cols[1].button("What should ops review first?"):
             st.session_state["copilot_question"] = "What should the ops team review first?"
-        if sample_cols[2].button("Top fraud locations"):
-            st.session_state["copilot_question"] = "Which states have the highest fraud risk?"
+        if sample_cols[2].button("Top return locations"):
+            st.session_state["copilot_question"] = "Which states have the highest return risk?"
 
         sample_cols2 = st.columns(3)
         if sample_cols2[0].button("Return abuse drivers"):

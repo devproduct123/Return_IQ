@@ -13,19 +13,18 @@ def _case_row(**overrides):
     row = {
         "order_id": "O00001",
         "customer_id": "C1000",
-        "risk_type_display": "Fraud Risk",
+        "risk_type_display": "Return Risk",
         "priority_tier": "High",
         "case_status": "Open",
         "workflow_stage": "Review Queue",
-        "recommended_action": "Hold Fulfillment",
-        "ai_agent_next_step": "Pause shipment and verify customer",
+        "recommended_action": "Restrict Return / Refund",
+        "ai_agent_next_step": "Flag for high return risk and review return history",
         "risk_reason_summary": "high-value order",
-        "fraud_score": 0.8,
-        "return_risk_score": 0.2,
+        "return_risk_score": 0.8,
         "unified_risk_score": 0.8,
         "order_value": 300.0,
         "past_returns": 1,
-        "chargeback_history": 0,
+        "past_orders": 5,
         "payment_method": "Stripe",
         "product_name": "Hoodie",
         "product_category": "Apparel",
@@ -42,7 +41,7 @@ def _risk_data():
         {
             "order_id": "O00001",
             "risk_level": "High",
-            "risk_type_display": "Fraud Risk",
+            "risk_type_display": "Return Risk",
             "order_value": 300.0,
             "case_status": "Open",
             "priority_tier": "High",
@@ -50,9 +49,8 @@ def _risk_data():
             "product_name": "Hoodie",
             "return_risk_score": 0.2,
             "state": "CA",
-            "fraud_score": 0.8,
-            "recommended_action": "Hold Fulfillment",
-            "unified_risk_score": 0.8,
+            "recommended_action": "Restrict Return / Refund",
+            "unified_risk_score": 0.2,
         },
         {
             "order_id": "O00002",
@@ -65,7 +63,6 @@ def _risk_data():
             "product_name": "Boots",
             "return_risk_score": 0.7,
             "state": "NY",
-            "fraud_score": 0.1,
             "recommended_action": "Review Return Behavior",
             "unified_risk_score": 0.7,
         },
@@ -80,7 +77,6 @@ def _risk_data():
             "product_name": "Hoodie",
             "return_risk_score": 0.1,
             "state": "CA",
-            "fraud_score": 0.05,
             "recommended_action": "Allow",
             "unified_risk_score": 0.1,
         },
@@ -91,7 +87,7 @@ def test_build_case_timeline_for_open_case():
     assert build_case_timeline(_case_row()) == [
         ("Case Created", "done"),
         ("Review Queue", "current"),
-        ("Action: Hold Fulfillment", "current"),
+        ("Action: Restrict Return / Refund", "current"),
         ("Pending Resolution", "pending"),
     ]
 
@@ -111,12 +107,12 @@ def test_build_case_timeline_for_closed_allowed_case():
 
 def test_answer_risk_question_summary_matches_existing_output():
     assert answer_risk_question("Summarize current risk", _risk_data()) == (
-        "In the current filtered view, 2 out of 3 orders are flagged high risk. "
+        "In the current filtered view, 2 out of 3 orders are flagged for return risk. "
         "Revenue at risk is $500. "
         "Protected revenue on closed flagged cases is $200. "
         "There are 1 open cases and 2 high-priority cases. "
-        "Return risk is highest in Footwear, fraud risk is strongest in CA, "
-        "and the most common recommended action is Hold Fulfillment."
+        "Return risk pressure is highest in Footwear, with NY as the top-risk state, "
+        "and the most common recommended action is Restrict Return / Refund."
     )
 
 
@@ -128,9 +124,8 @@ def test_answer_risk_question_handles_empty_data():
 
 def test_answer_case_question_why_and_none_case():
     assert answer_case_question("why was this flagged?", _case_row()) == (
-        "This case was flagged as Fraud Risk. "
-        "Fraud score is 0.800, return risk score is 0.200, "
-        "and unified risk score is 0.800. "
+        "This case was flagged as Return Risk. "
+        "Return risk score is 0.800. "
         "Primary reason: high-value order"
     )
     assert answer_case_question("summary", None) == (
@@ -164,4 +159,3 @@ def test_open_high_risk_cases_and_priority_sorting():
         "LOW",
     ]
     assert "priority_sort" in sorted_cases.columns
-

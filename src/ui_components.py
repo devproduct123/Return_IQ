@@ -15,7 +15,6 @@ _BADGE_CLASS = {
     "High":         "badge-high",
     "Moderate":     "badge-moderate",
     "Low":          "badge-low",
-    "Fraud Risk":   "badge-fraud",
     "Return Risk": "badge-return",
     "Open":         "badge-open",
     "Closed":       "badge-closed",
@@ -33,10 +32,10 @@ def render_page_header():
     st.markdown("""
 <div class="riq-page-header">
   <div style="display:flex;align-items:baseline;gap:0.5rem;">
-    <span style="font-size:1.3rem;font-weight:700;color:#1d4ed8;letter-spacing:-0.02em;">Aignita Risk Intelligence</span>
+    <span style="font-size:1.3rem;font-weight:700;color:#1d4ed8;letter-spacing:-0.02em;">Aignita Return Risk Intelligence</span>
   </div>
   <div style="font-size:0.8rem;color:#64748b;margin-top:2px;">
-    AI-powered fraud, return risk, and risk operations intelligence for e-commerce merchants
+    AI-powered return risk management and operations intelligence for e-commerce merchants
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -117,13 +116,13 @@ def render_today_action_panel(actions: list[dict]):
 def render_hero_summary(metrics: dict, top_category: str, top_state: str):
     st.markdown(f"""
 <div class="riq-hero">
-  <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#94a3b8;margin-bottom:0.4rem;">Risk Intelligence Summary</div>
+  <div style="font-size:0.68rem;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:#94a3b8;margin-bottom:0.4rem;">Return Risk Intelligence Summary</div>
   <div style="font-size:0.9rem;color:#334155;line-height:1.75;">
-    <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged high risk, with
+    <b>{metrics["flagged_pct"]:.1f}%</b> of filtered orders are flagged for return risk, with
     <b>{format_currency(metrics["revenue_at_risk"])}</b> currently at risk and
     <b>{format_currency(metrics["protected_revenue"])}</b> already protected across closed flagged cases.
     There are <b>{metrics["high_cases"]:,}</b> high-priority cases.
-    Return risk pressure is highest in <b>{_html.escape(str(top_category))}</b>, and fraud pressure is strongest in
+    Return risk is highest in <b>{_html.escape(str(top_category))}</b>, with the highest pressure in
     <b>{_html.escape(str(top_state))}</b>.
   </div>
 </div>
@@ -300,7 +299,7 @@ def render_timeline_html(steps):
 _VERIFICATION_TEMPLATES = [
     {
         "label": "Hold — Identity Verification",
-        "scenario": "High-fraud score, new customer or flagged geography",
+        "scenario": "High return risk score, new customer or flagged geography",
         "body": (
             "Hi {customer_id},\n\n"
             "We're doing a quick security check on order {order_id} before we ship.\n\n"
@@ -390,16 +389,16 @@ def render_ai_output(text: str):
 
 def render_insight_footer(metrics: dict, top_category: str, top_state: str):
     st.markdown("---")
-    st.subheader("AI Risk Insights")
+    st.subheader("Return Risk Insights")
 
     insight_text = f"""
-- **{metrics["flagged_pct"]:.1f}%** of filtered orders are flagged high risk.
+- **{metrics["flagged_pct"]:.1f}%** of filtered orders are flagged for return risk.
 - **{metrics["high_cases"]:,}** cases are currently marked **High** priority and should be handled first.
 - **{metrics["open_cases"]:,}** cases are currently open, while **{metrics["closed_cases"]:,}** have already been resolved.
 - **{format_currency(metrics["protected_revenue"])}** in revenue has already been protected across closed flagged cases.
-- **{_html.escape(str(top_category))}** is the strongest return risk category.
-- **{_html.escape(str(top_state))}** has the highest average fraud score.
+- **{_html.escape(str(top_category))}** is the highest return risk product category.
+- **{_html.escape(str(top_state))}** has the highest average return risk score by state.
 """
 
     st.info(insight_text)
-    st.markdown("Pilot with Aignita to validate these signals against live merchant outcomes.")
+    st.markdown("Pilot with Aignita to validate these return risk signals against live merchant outcomes.")

@@ -22,7 +22,6 @@ def compute_summary_metrics(data: pd.DataFrame):
     flagged_orders = int((data["risk_level"] == "High").sum())
     flagged_pct = round((flagged_orders / total_orders)
                         * 100, 1) if total_orders else 0.0
-    fraud_cases = int((data["risk_type_display"] == "Fraud Risk").sum())
     return_cases = int((data["risk_type_display"] == "Return Risk").sum())
     revenue_at_risk = float(
         data.loc[data["risk_level"] == "High", "order_value"].sum())
@@ -40,7 +39,6 @@ def compute_summary_metrics(data: pd.DataFrame):
         "total_orders": total_orders,
         "flagged_orders": flagged_orders,
         "flagged_pct": flagged_pct,
-        "fraud_cases": fraud_cases,
         "return_cases": return_cases,
         "revenue_at_risk": revenue_at_risk,
         "high_cases": high_cases,
