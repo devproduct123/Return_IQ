@@ -799,6 +799,84 @@ def seed_live_demo_feedback(live: pd.DataFrame) -> pd.DataFrame:
     return seeded
 
 
+EXTERNAL_NETWORK_COLUMNS = [
+    "ext_return_rate",
+    "ext_merchant_count",
+    "ext_abuse_flags",
+    "ext_linked_accounts",
+]
+
+
+def add_external_network_signals(df: pd.DataFrame, seed: int = 7) -> pd.DataFrame:
+    """Attach synthetic cross-merchant return signals (as if from a shared returns network).
+
+    Uses its own RNG so adding these columns never changes the rest of the dataset.
+    Each customer gets a stable network profile; the scripted storylines override it:
+    the linked-account cluster is flagged, and the Jan 2026 new-account Boots pattern
+    shows elevated or flagged network behaviour despite having no history in this store.
+    """
+    rng = np.random.default_rng(seed)
+    out = df.copy()
+
+    # Profile the full customer universe so a customer's network profile is identical
+    # in the historical and live datasets.
+    universe = [f"C{i}" for i in range(1000, 3000)] + RING_CUSTOMERS
+    extra = sorted(set(out["customer_id"].astype(str)) - set(universe))
+    customers = universe + extra
+    tiers = rng.choice(["Clean", "Elevated", "Flagged"], size=len(customers), p=[0.72, 0.21, 0.07])
+    profiles = {}
+    for customer, tier in zip(customers, tiers):
+        if customer in RING_CUSTOMERS:
+            tier = "Flagged"
+        if tier == "Flagged":
+            profiles[customer] = (
+                round(float(rng.uniform(0.45, 0.80)), 3),
+                int(rng.integers(5, 13)),
+                int(rng.integers(1, 4)),
+                int(rng.integers(2, 9)) if customer in RING_CUSTOMERS else int(rng.integers(0, 3)),
+            )
+        elif tier == "Elevated":
+            profiles[customer] = (
+                round(float(rng.uniform(0.25, 0.45)), 3),
+                int(rng.integers(3, 7)),
+                0,
+                int(rng.integers(0, 2)),
+            )
+        else:
+            profiles[customer] = (
+                round(float(rng.uniform(0.0, 0.22)), 3),
+                int(rng.integers(0, 3)),
+                0,
+                0,
+            )
+
+    values = np.array([profiles[str(c)] for c in out["customer_id"]], dtype=float)
+    out["ext_return_rate"] = values[:, 0]
+    out["ext_merchant_count"] = values[:, 1].astype(int)
+    out["ext_abuse_flags"] = values[:, 2].astype(int)
+    out["ext_linked_accounts"] = values[:, 3].astype(int)
+
+    boots_pattern = (
+        out["product_name"].astype(str).eq("Boots")
+        & out["discount_used"].eq(1)
+        & pd.to_numeric(out["customer_lifetime_days"], errors="coerce").lt(21)
+        & pd.to_numeric(out["past_orders"], errors="coerce").le(2)
+    )
+    n = int(boots_pattern.sum())
+    if n:
+        flagged = rng.random(n) < 0.6
+        out.loc[boots_pattern, "ext_return_rate"] = np.where(
+            flagged, rng.uniform(0.50, 0.85, n), rng.uniform(0.28, 0.45, n)
+        ).round(3)
+        out.loc[boots_pattern, "ext_merchant_count"] = np.where(
+            flagged, rng.integers(6, 15, n), rng.integers(3, 6, n)
+        )
+        out.loc[boots_pattern, "ext_abuse_flags"] = np.where(flagged, rng.integers(1, 4, n), 0)
+        out.loc[boots_pattern, "ext_linked_accounts"] = np.where(flagged, rng.integers(1, 5, n), 0)
+
+    return out
+
+
 def print_story_check(historical: pd.DataFrame, live: pd.DataFrame):
     view = historical.copy()
     view["month"] = pd.to_datetime(view["order_date"]).dt.to_period("M")
@@ -829,6 +907,8 @@ def print_story_check(historical: pd.DataFrame, live: pd.DataFrame):
 if __name__ == "__main__":
     historical_df = build_historical_dataset()
     live_df = seed_live_demo_feedback(build_live_dataset())
+    historical_df = add_external_network_signals(historical_df)
+    live_df = add_external_network_signals(live_df)
 
     os.makedirs("data", exist_ok=True)
     historical_df.to_csv("data/transactions.csv", index=False)

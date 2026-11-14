@@ -38,6 +38,7 @@ Copy `.env` and set `GROQ_API_KEY` for LLM features. Without it, the app falls b
 | `data_loader.py` | Loads `data/transactions.csv`, validates the 25 required columns, parses dates, adds `risk_type_display` |
 | `metrics.py` | Pure functions: `format_currency`, `compute_summary_metrics`, `safe_top_index`, `to_csv_download` |
 | `risk_logic.py` | Deterministic logic: case priority sorting, timeline building, fallback case selection, Quick Insights rule-based answers |
+| `return_profiles.py` | Customer Return Profiles: segments orders by own-store return rate × external network signals (`ext_*` columns) into 12 detailed segments (plus a 4-box Simple rollup via `DETAILED_TO_SIMPLE`), each with a recommended action/policy |
 | `ui_components.py` | Rendering helpers: page header, hero summary, case detail box, timeline HTML, AI answer blocks, badges |
 
 **Data flow:**

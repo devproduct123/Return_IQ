@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 from groq import Groq
@@ -35,6 +36,18 @@ from src.model_learning import (
     measure_interventions,
     prepare_learning_frame,
     summarize_model_misses,
+)
+from src.return_profiles import (
+    ACTION_TIER_ORDER,
+    NETWORK_BANDS,
+    SIMPLE_NETWORK_BANDS,
+    SIMPLE_STORE_BANDS,
+    NO_NETWORK_DATA,
+    STORE_BANDS,
+    assign_return_profiles,
+    detailed_segments_in_simple,
+    has_network_data,
+    summarize_return_profiles,
 )
 from src.risk_logic import (
     answer_historical_question,
@@ -1055,6 +1068,479 @@ def render_monthly_return_trend(historical_df: pd.DataFrame):
     trend_col2.plotly_chart(reason_fig, width="stretch")
 
 
+ACTION_TIER_COLORS = {
+    "Reward": "#15803d",
+    "Allow": "#16a34a",
+    "Fix Product": "#2563eb",
+    "Monitor": "#0891b2",
+    "Soft Review": "#d97706",
+    "Restrict": "#dc2626",
+    "Block / Manual": "#7f1d1d",
+}
+RESTRICTIVE_TIERS = ["Restrict", "Block / Manual"]
+
+
+STORE_BAND_LABELS = {
+    "Low": "<b>Store: Low</b><br>0–20% returned",
+    "Frequent": "<b>Store: Frequent</b><br>20–40% returned",
+    "Serial": "<b>Store: Serial</b><br>40%+ returned",
+    "New / Thin File": "<b>Store: New</b><br>under 3 orders",
+}
+NETWORK_BAND_LABELS = {
+    "Clean": "<b>Network: Clean</b><br>normal returns elsewhere",
+    "Elevated": "<b>Network: Elevated</b><br>25%+ or 3+ stores",
+    "Flagged": "<b>Network: Flagged</b><br>abuse flags / linked accounts",
+}
+
+SIMPLE_STORE_BAND_LABELS = {
+    "Low": "<b>Store: Low</b><br>0–20% returned<br>incl. new accounts",
+    "High": "<b>Store: High</b><br>20%+ returned",
+}
+SIMPLE_NETWORK_BAND_LABELS = {
+    "Clean": "<b>Network: Clean</b><br>no abuse flags elsewhere",
+    "Risky": "<b>Network: Risky</b><br>abuse flags / linked accounts",
+}
+
+
+def build_segment_grid_figure(
+    summary: pd.DataFrame,
+    metric_col: str,
+    metric_label: str,
+    network_available: bool,
+    simple: bool = False,
+):
+    store_bands = SIMPLE_STORE_BANDS if simple else STORE_BANDS
+    store_labels = SIMPLE_STORE_BAND_LABELS if simple else STORE_BAND_LABELS
+    network_labels = SIMPLE_NETWORK_BAND_LABELS if simple else NETWORK_BAND_LABELS
+    all_network_bands = SIMPLE_NETWORK_BANDS if simple else NETWORK_BANDS
+    network_cols = all_network_bands if network_available else ["Clean"]
+    grid = summary.set_index(["store_band", "network_band"])
+    z, text, hover = [], [], []
+    for store_band in store_bands:
+        z_row, t_row, h_row = [], [], []
+        for network_band in network_cols:
+            row = grid.loc[(store_band, network_band)]
+            z_row.append(row[metric_col] if row["orders"] else None)
+            t_row.append(
+                f"<b>{row['segment_id']}. {row['segment_name']}</b><br>"
+                f"<span style='font-size:20px'><b>{row[metric_col]:.1f}%</b></span><br>"
+                f"{row['orders']:,} orders · {row['order_share_pct']:.1f}%<br>"
+                f"<i>{row['action_tier']}</i>"
+            )
+            h_row.append(
+                f"<b>{row['segment_id']}. {row['segment_name']}</b><br>"
+                f"{metric_label}: {row[metric_col]:.1f}%<br>"
+                f"Customers: {row['customers']:,} · Orders: {row['orders']:,}<br>"
+                f"Action: {row['action_tier']} – {row['return_policy']}"
+            )
+        z.append(z_row)
+        text.append(t_row)
+        hover.append(h_row)
+
+    # Cap the colour scale so one extreme segment doesn't wash out the differences between
+    # the rest; cells above the cap show the top colour and their true value as text.
+    values = [v for r in z for v in r if v is not None]
+    median = float(pd.Series(values).median()) if values else 0.0
+    zmax = min(max(values, default=1.0), max(40.0, 2.5 * median)) or 1.0
+    zmin = 0.7 * min(values, default=0.0)
+
+    x_labels = [network_labels[b] for b in network_cols] if network_available else [f"<b>{NO_NETWORK_DATA}</b>"]
+    fig = go.Figure(
+        go.Heatmap(
+            z=z,
+            x=x_labels,
+            y=[store_labels[b] for b in store_bands],
+            text=text,
+            texttemplate="%{text}",
+            textfont=dict(size=16 if simple else 14),
+            customdata=hover,
+            hovertemplate="%{customdata}<extra></extra>",
+            colorscale=[[0, "#ecfdf5"], [0.35, "#fef3c7"], [0.7, "#fdba74"], [1, "#ef4444"]],
+            zmin=zmin,
+            zmax=zmax,
+            xgap=6,
+            ygap=6,
+            colorbar=dict(title=dict(text=f"{metric_label} %", side="right"), thickness=14, len=0.9),
+        )
+    )
+    fig.update_layout(
+        height=600 if simple else 760,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif", size=13, color="#1e293b"),
+        margin=dict(l=10, r=10, t=70, b=10),
+        hoverlabel=dict(bgcolor="#ffffff", font_size=13),
+    )
+    fig.update_xaxes(side="top", showgrid=False, zeroline=False, tickfont=dict(size=13, color="#334155"))
+    fig.update_yaxes(autorange="reversed", showgrid=False, zeroline=False, tickfont=dict(size=13, color="#334155"))
+    return fig
+
+
+def render_segment_card_html(
+    row: pd.Series,
+    metric_label: str,
+    metric_col: str,
+    network_available: bool,
+    includes: list[str] | None = None,
+) -> str:
+    color = ACTION_TIER_COLORS.get(row["action_tier"], "#334155")
+    network = row["network_band"] if network_available else NO_NETWORK_DATA
+    return f"""
+<div style="border:1px solid #e2e8f0;border-top:5px solid {color};border-radius:10px;padding:14px 16px;margin-bottom:14px;background:#ffffff;min-height:250px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+    <div style="font-weight:700;font-size:1.02rem;color:#0f172a;">{row['segment_id']}. {row['segment_name']}</div>
+    <span style="background:{color};color:#fff;font-size:0.72rem;padding:2px 9px;border-radius:10px;white-space:nowrap;">{row['action_tier']}</span>
+  </div>
+  <div style="color:#64748b;font-size:0.82rem;margin:4px 0 10px 0;">Store: <b>{row['store_band']}</b> · Network: <b>{network}</b></div>
+  <div style="display:flex;gap:14px;margin-bottom:10px;">
+    <div><div style="font-size:1.15rem;font-weight:700;color:#0f172a;">{row['customers']:,}</div><div style="font-size:0.72rem;color:#64748b;">customers</div></div>
+    <div><div style="font-size:1.15rem;font-weight:700;color:#0f172a;">{row['orders']:,}</div><div style="font-size:0.72rem;color:#64748b;">orders ({row['order_share_pct']:.1f}%)</div></div>
+    <div><div style="font-size:1.15rem;font-weight:700;color:{color};">{row[metric_col]:.1f}%</div><div style="font-size:0.72rem;color:#64748b;">{metric_label.lower()}</div></div>
+  </div>
+  <div style="font-size:0.86rem;color:#0f172a;margin-bottom:6px;"><b>Action:</b> {row['recommended_action']}</div>
+  <div style="font-size:0.8rem;color:#475569;"><b>Policy:</b> {row['return_policy']}<br><b>Owner:</b> {row['owner']}</div>
+  {f'<div style="font-size:0.78rem;color:#64748b;margin-top:8px;"><b>Includes:</b> {", ".join(includes)}</div>' if includes else ''}
+</div>
+"""
+
+
+def render_customer_return_profiles(data: pd.DataFrame, work_mode: str):
+    is_historical = work_mode == "Historical Intelligence"
+    st.markdown(
+        "Customers are segmented on two axes: **return history in this store** "
+        "(past returns ÷ past orders) and **return history at other stores** "
+        "(cross-merchant network signals). Each segment carries a recommended return policy."
+    )
+    if data.empty:
+        st.info("No orders in the current filter selection.")
+        return
+
+    network_available = has_network_data(data)
+    if not network_available:
+        st.warning(
+            "External network signals (ext_* columns) are not available for this data source. "
+            "Segments use store history only and the Clean-network treatment."
+        )
+
+    view = st.radio(
+        "Segmentation view",
+        ["Simple (4 segments)", "Detailed (12 segments)"],
+        horizontal=True,
+        key="return_profile_view",
+        help="Simple rolls the 12 detailed segments up into a 2×2. Each detailed segment maps to exactly one simple box.",
+    )
+    simple = view.startswith("Simple")
+    level = "simple" if simple else "detailed"
+    name_col = "simple_segment_name" if simple else "segment_name"
+    tier_col = "simple_action_tier" if simple else "segment_action_tier"
+
+    profiled = assign_return_profiles(data)
+    summary = summarize_return_profiles(profiled, level)
+    active = summary[summary["orders"] > 0]
+
+    restrictive = profiled[tier_col].isin(RESTRICTIVE_TIERS)
+    network_flagged = profiled["network_band"].eq("Flagged")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Active Segments", f"{len(active)} / {len(summary)}")
+    k2.metric(
+        "Orders in Restrict / Block Segments",
+        f"{int(restrictive.sum()):,}",
+        f"{restrictive.mean() * 100:.1f}% of orders",
+        delta_color="off",
+    )
+    k3.metric(
+        "Network-Flagged Customers",
+        f"{profiled.loc[network_flagged, 'customer_id'].nunique():,}" if network_available else "—",
+    )
+    if is_historical:
+        restricted_loss = float(
+            profiled.loc[restrictive & pd.to_numeric(profiled["return_completed"], errors="coerce").eq(1), "order_value"].sum()
+        )
+        k4.metric("Approved Return Value (Restrict / Block)", format_currency(restricted_loss))
+    else:
+        open_restricted = int((restrictive & profiled["case_status"].astype(str).eq("Open")).sum())
+        k4.metric("Open Cases in Restrict / Block Segments", f"{open_restricted:,}")
+
+    # ── Segment grid (full width) ───────────────────────────────────────────────
+    metric_col = "return_request_rate_pct" if is_historical else "high_risk_pct"
+    metric_label = "Return request rate" if is_historical else "High-risk rate"
+
+    st.markdown("### Segment Grid")
+    grid_caption = (
+        f"Rows = return history in this store · Columns = return history at other stores · "
+        f"Cell colour = {metric_label.lower()}. Hover a cell for full detail."
+    )
+    if simple:
+        grid_caption += (
+            " Network 'Risky' = flagged for abuse or linked accounts elsewhere. "
+            "Exception: brand-new accounts flagged elsewhere go to **Restrict**, not Watch."
+        )
+    st.caption(grid_caption)
+    st.plotly_chart(
+        build_segment_grid_figure(summary, metric_col, metric_label, network_available, simple=simple),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+
+    # ── Segment size & impact charts ────────────────────────────────────────────
+    chart_left, chart_right = st.columns(2)
+    bar_metric = "approved_return_value" if is_historical else "orders"
+    bar_title = "Approved Return Value by Segment" if is_historical else "Live Orders by Segment"
+    bar_df = active.sort_values(bar_metric, ascending=True)
+    bar = px.bar(
+        bar_df,
+        x=bar_metric,
+        y="segment_name",
+        color="action_tier",
+        orientation="h",
+        title=bar_title,
+        color_discrete_map=ACTION_TIER_COLORS,
+        category_orders={"action_tier": ACTION_TIER_ORDER},
+        labels={bar_metric: "Approved Return Value ($)" if is_historical else "Orders", "segment_name": "", "action_tier": ""},
+    )
+    bar = style_chart(bar, height=360 if simple else 480, showlegend=True)
+    bar.update_layout(
+        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
+        margin=dict(l=10, r=18, t=48, b=90),
+    )
+    bar.update_yaxes(categoryorder="array", categoryarray=bar_df["segment_name"].tolist())
+    chart_left.plotly_chart(bar, width="stretch")
+
+    rate_df = active.sort_values(metric_col, ascending=True)
+    rate = px.bar(
+        rate_df,
+        x=metric_col,
+        y="segment_name",
+        color="action_tier",
+        orientation="h",
+        title=f"{metric_label} by Segment (%)",
+        text=rate_df[metric_col].map(lambda v: f"{v:.1f}%"),
+        color_discrete_map=ACTION_TIER_COLORS,
+        category_orders={"action_tier": ACTION_TIER_ORDER},
+        labels={metric_col: f"{metric_label} (%)", "segment_name": "", "action_tier": ""},
+    )
+    rate = style_chart(rate, height=360 if simple else 480, showlegend=False)
+    rate.update_traces(textposition="outside", cliponaxis=False)
+    rate.update_layout(margin=dict(l=10, r=40, t=48, b=90))
+    rate.update_yaxes(categoryorder="array", categoryarray=rate_df["segment_name"].tolist())
+    chart_right.plotly_chart(rate, width="stretch")
+
+    # ── Playbook: recommended action per segment ────────────────────────────────
+    st.markdown("### Segment Playbook – Recommended Actions")
+    playbook_rows = summary if network_available else summary[summary["network_band"].eq("Clean")]
+    cards = [
+        render_segment_card_html(
+            row, metric_label, metric_col, network_available,
+            includes=detailed_segments_in_simple(row["segment_id"]) if simple else None,
+        )
+        for _, row in playbook_rows.iterrows()
+    ]
+    per_row = 2 if simple else 3
+    for start in range(0, len(cards), per_row):
+        cols = st.columns(per_row)
+        for col, card in zip(cols, cards[start:start + per_row]):
+            col.markdown(card, unsafe_allow_html=True)
+
+    with st.expander("Segment metrics table"):
+        table_cols = [
+            "segment_id", "segment_name", "store_band", "network_band", "action_tier", "customers", "orders",
+            "order_share_pct", metric_col, "approved_return_value", "avg_order_value", "avg_return_risk_score",
+            "avg_store_return_rate_pct", "avg_network_return_rate_pct", "discount_pct", "expedited_pct",
+            "avg_tenure_days", "top_category", "top_product", "top_return_reason", "return_policy", "owner",
+        ]
+        table = playbook_rows[table_cols].rename(columns={
+            "segment_id": "#", "segment_name": "Segment", "store_band": "Store History",
+            "network_band": "Network History", "action_tier": "Action Tier", "customers": "Customers",
+            "orders": "Orders", "order_share_pct": "% of Orders", metric_col: f"{metric_label} %",
+            "approved_return_value": "Approved Return Value", "avg_order_value": "Avg Order Value",
+            "avg_return_risk_score": "Avg Return Risk", "avg_store_return_rate_pct": "Store Return Rate %",
+            "avg_network_return_rate_pct": "Network Return Rate %", "discount_pct": "Discount %",
+            "expedited_pct": "Expedited %", "avg_tenure_days": "Avg Tenure (days)", "top_category": "Top Category",
+            "top_product": "Top Product", "top_return_reason": "Top Return Reason",
+            "return_policy": "Return Policy", "owner": "Owner",
+        })
+        if not network_available:
+            table["Network History"] = NO_NETWORK_DATA
+        pct = st.column_config.NumberColumn(format="%.1f%%")
+        st.dataframe(
+            table,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Approved Return Value": st.column_config.NumberColumn(format="$%.0f"),
+                "Avg Order Value": st.column_config.NumberColumn(format="$%.0f"),
+                "Avg Return Risk": st.column_config.NumberColumn(format="%.3f"),
+                "% of Orders": pct, f"{metric_label} %": pct, "Store Return Rate %": pct,
+                "Network Return Rate %": pct, "Discount %": pct, "Expedited %": pct,
+            },
+        )
+
+    # ── Segment profile drill-down ──────────────────────────────────────────────
+    st.markdown("### Segment Profile")
+    if active.empty:
+        return
+    options = active.sort_values("segment_id")["segment_name"].tolist()
+    default_name = active.sort_values(metric_col, ascending=False)["segment_name"].iloc[0]
+    selected_name = st.selectbox(
+        "Select a segment", options, index=options.index(default_name), key=f"return_profile_segment_{level}"
+    )
+    seg = summary[summary["segment_name"].eq(selected_name)].iloc[0]
+    seg_rows = profiled[profiled[name_col].eq(selected_name)]
+    includes_html = (
+        f'<div style="color:#64748b;margin-top:6px;"><b>Includes detailed segments:</b> '
+        f'{", ".join(detailed_segments_in_simple(seg["segment_id"]))}</div>'
+        if simple else ""
+    )
+    tier_color = ACTION_TIER_COLORS.get(seg["action_tier"], "#334155")
+
+    st.markdown(
+        f"""
+<div style="border-left:6px solid {tier_color};background:#f8fafc;padding:16px 20px;border-radius:8px;margin-bottom:14px;">
+  <div style="font-size:1.15rem;font-weight:700;color:#0f172a;">{seg['segment_id']}. {seg['segment_name']}
+    <span style="background:{tier_color};color:#fff;font-size:0.78rem;padding:2px 10px;border-radius:10px;margin-left:8px;vertical-align:middle;">{seg['action_tier']}</span>
+  </div>
+  <div style="color:#475569;margin:6px 0 10px 0;">Store history: <b>{seg['store_band']}</b> · Network history: <b>{seg['network_band'] if network_available else NO_NETWORK_DATA}</b> — {seg['profile']}</div>
+  <div style="color:#0f172a;"><b>Recommended action:</b> {seg['recommended_action']}</div>
+  <div style="color:#475569;margin-top:6px;"><b>Return policy:</b> {seg['return_policy']} · <b>Owner:</b> {seg['owner']}</div>
+  {includes_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Customers", f"{seg['customers']:,}")
+    p2.metric("Orders", f"{seg['orders']:,}", f"{seg['order_share_pct']:.1f}% of orders", delta_color="off")
+    p3.metric("Avg Order Value", format_currency(seg["avg_order_value"]))
+    if is_historical:
+        p4.metric("Return Request Rate", f"{seg['return_request_rate_pct']:.1f}%")
+    else:
+        p4.metric("High-Risk Rate", f"{seg['high_risk_pct']:.1f}%")
+
+    q1, q2, q3, q4 = st.columns(4)
+    if is_historical:
+        q1.metric("Approved Return Value", format_currency(seg["approved_return_value"]))
+    else:
+        q1.metric("Open Cases", f"{int(seg_rows['case_status'].astype(str).eq('Open').sum()):,}")
+    q2.metric("Store Return Rate", f"{seg['avg_store_return_rate_pct']:.1f}%")
+    q3.metric(
+        "Network Return Rate",
+        f"{seg['avg_network_return_rate_pct']:.1f}%" if network_available and seg["avg_network_return_rate_pct"] is not None else "—",
+    )
+    q4.metric("Avg Tenure", f"{seg['avg_tenure_days']:,} days")
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Discount Used", f"{seg['discount_pct']:.0f}%")
+    r2.metric("Expedited Shipping", f"{seg['expedited_pct']:.0f}%")
+    r3.metric("Top Category", seg["top_category"])
+    r4.metric("Top Return Reason", seg["top_return_reason"])
+
+    d1, d2 = st.columns(2)
+    products = (
+        seg_rows.groupby(["product_category", "product_name"], as_index=False)
+        .agg(orders=("order_id", "count"), return_requests=("return_requested", "sum"), revenue=("order_value", "sum"))
+        .sort_values("orders", ascending=False)
+        .head(8)
+    )
+    products["return_rate_%"] = (products["return_requests"] / products["orders"] * 100).round(1)
+    d1.markdown("**Top products in this segment**")
+    d1.dataframe(
+        products.rename(columns={
+            "product_category": "Category", "product_name": "Product", "orders": "Orders",
+            "return_requests": "Return Requests", "revenue": "Revenue", "return_rate_%": "Return Rate %",
+        }),
+        width="stretch",
+        hide_index=True,
+        column_config={"Revenue": st.column_config.NumberColumn(format="$%.0f")},
+    )
+
+    customers = (
+        seg_rows.groupby("customer_id", as_index=False)
+        .agg(
+            orders=("order_id", "count"),
+            store_return_rate=("store_return_rate", "max"),
+            network_return_rate=("ext_return_rate", "max") if network_available else ("store_return_rate", "size"),
+            revenue=("order_value", "sum"),
+            latest_order=("order_date", "max"),
+        )
+        .sort_values(["store_return_rate", "revenue"], ascending=False)
+        .head(10)
+    )
+    if not network_available:
+        customers = customers.drop(columns=["network_return_rate"])
+    d2.markdown("**Customers to review in this segment**")
+    d2.dataframe(
+        customers.rename(columns={
+            "customer_id": "Customer", "orders": "Orders", "store_return_rate": "Store Return Rate",
+            "network_return_rate": "Network Return Rate", "revenue": "Revenue", "latest_order": "Latest Order",
+        }),
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Store Return Rate": st.column_config.NumberColumn(format="%.2f"),
+            "Network Return Rate": st.column_config.NumberColumn(format="%.2f"),
+            "Revenue": st.column_config.NumberColumn(format="$%.0f"),
+            "Latest Order": st.column_config.DateColumn(format="YYYY-MM-DD"),
+        },
+    )
+
+    export_cols = [
+        c for c in [
+            "order_id", "customer_id", "order_date", "product_category", "product_name", "order_value",
+            "past_orders", "past_returns", "store_return_rate", "ext_return_rate", "ext_merchant_count",
+            "ext_abuse_flags", "ext_linked_accounts", "store_band", "network_band", "simple_segment_name", "segment_name",
+            "segment_action_tier", "segment_recommended_action", "risk_level", "case_status",
+        ] if c in profiled.columns
+    ]
+    st.download_button(
+        f"Download {selected_name} orders (CSV)",
+        data=to_csv_download(seg_rows[export_cols]),
+        file_name=f"return_profile_{level}_{seg['segment_id']}_{selected_name.lower().replace(' ', '_').replace('&', 'and')}.csv",
+        mime="text/csv",
+        key="return_profile_download",
+    )
+
+
+def render_approved_return_value_by_product(data: pd.DataFrame):
+    """Approved return value by category and product (formerly the Return Outcomes tab)."""
+    view = data.copy()
+    view["actual_outcome"] = view.apply(simplify_actual_outcome, axis=1)
+    approved = view[view["actual_outcome"].eq("Return Approved")]
+    st.markdown("### Approved Return Value by Category and Product")
+    if approved.empty:
+        st.info("No approved returns in the current filter selection.")
+        return
+
+    by_category = (
+        approved.groupby("product_category", as_index=False)["order_value"].sum()
+        .sort_values("order_value", ascending=False)
+    )
+    by_product = (
+        approved.groupby("product_name", as_index=False)["order_value"].sum()
+        .sort_values("order_value", ascending=False)
+        .head(10)
+    )
+    col1, col2 = st.columns(2)
+    col1.plotly_chart(
+        style_chart(px.bar(
+            by_category, x="product_category", y="order_value",
+            title="Approved Return Value by Category",
+            labels={"product_category": "Product Category", "order_value": "Approved Return Value ($)"},
+            color_discrete_sequence=["#dc2626"],
+        ), x_tickangle=-25),
+        width="stretch",
+    )
+    col2.plotly_chart(
+        style_chart(px.bar(
+            by_product, x="product_name", y="order_value",
+            title="Top Products by Approved Return Value",
+            labels={"product_name": "Product", "order_value": "Approved Return Value ($)"},
+            color_discrete_sequence=["#dc2626"],
+        ), x_tickangle=-25),
+        width="stretch",
+    )
+
+
 def render_historical_intelligence_view(data: pd.DataFrame):
     st.markdown(
         "Actual outcomes, reason codes, customer comments, and operations resolutions from completed cases."
@@ -2067,19 +2553,17 @@ if work_mode == "Live Risk Queue":
 st.markdown("---")
 
 if work_mode == "Historical Intelligence":
-    tab_ov, tab_cp, tab_rt, tab_model = st.tabs(
-        ["Overview", "Return Risk Copilot", "Return Outcomes", "Model Learning"]
+    tab_ov, tab_profiles, tab_model, tab_cp = st.tabs(
+        ["Overview", "Customer Return Profiles", "Model Learning", "Return Risk Copilot"]
     )
     tab_rq = None
-    tab_fr = None
 else:
-    tab_ov, tab_cp, tab_rq, tab_rt = st.tabs(
-        ["Overview", "Return Risk Copilot", "Review Queue", "Return Risk"]
+    tab_rq, tab_ov, tab_profiles, tab_cp = st.tabs(
+        ["Review Queue", "Overview", "Customer Return Profiles", "Return Risk Copilot"]
     )
     tab_model = None
-    tab_fr = None
 
-# ── Tab 1: Overview ──────────────────────────────────────────────────────────────
+# ── Tab: Overview ──────────────────────────────────────────────────────────────
 
 with tab_ov:
     log_once("tab_overview_seen", "tab_view", {"tab": "Overview"})
@@ -2087,6 +2571,7 @@ with tab_ov:
 
     if work_mode == "Historical Intelligence":
         render_historical_intelligence_view(filtered_df)
+        render_approved_return_value_by_product(filtered_df)
     else:
         col1, col2 = st.columns(2)
 
@@ -2181,15 +2666,36 @@ with tab_ov:
         )
         workflow_dist.columns = ["workflow_stage", "count"]
 
+        col5, col6 = st.columns(2)
         if workflow_dist.empty:
-            st.info("No workflow stage data available for the selected filters.")
+            col5.info("No workflow stage data available for the selected filters.")
         else:
-            st.plotly_chart(
+            col5.plotly_chart(
                 style_chart(px.bar(
                     workflow_dist, x="workflow_stage", y="count",
                     title="Workflow Stage Split",
                     labels={"workflow_stage": "Workflow Stage", "count": "Number of Cases"},
                 ), x_tickangle=-15),
+                width="stretch"
+            )
+
+        returns_by_product = (
+            filtered_df[filtered_df["risk_type_display"] == "Return Risk"]
+            .groupby("product_name", as_index=False)["return_risk_score"]
+            .mean()
+            .sort_values("return_risk_score", ascending=False)
+            .head(10)
+        )
+        if returns_by_product.empty:
+            col6.info("No return risk data available for the selected filters.")
+        else:
+            col6.plotly_chart(
+                style_chart(px.bar(
+                    returns_by_product, x="product_name", y="return_risk_score",
+                    title="Top Products by Return Risk Score",
+                    labels={"product_name": "Product", "return_risk_score": "Average Return Risk Score"},
+                    color_discrete_sequence=["#d97706"],
+                ), x_tickangle=-30),
                 width="stretch"
             )
 
@@ -2201,152 +2707,14 @@ with tab_ov:
     with st.expander("Show raw filtered data"):
         st.dataframe(filtered_df.head(200), width="stretch")
 
-# ── Tab 4: Return Risk ───────────────────────────────────────────────────────────
+# ── Tab: Review Queue ───────────────────────────────────────────────────────────
 
-with tab_rt:
-    log_once("tab_returniq_seen", "tab_view", {"tab": "Return Risk"})
-    st.subheader("Return Outcomes" if work_mode == "Historical Intelligence" else "Return Risk")
-    returns_df = filtered_df[filtered_df["risk_type_display"]
-                             == "Return Risk"].copy()
+# ── Tab: Customer Return Profiles ────────────────────────────────────────────────
 
-    if returns_df.empty:
-        st.warning(
-            "No return risk transactions in the current filter selection.")
-    elif work_mode == "Historical Intelligence":
-        returns_df["actual_outcome"] = returns_df.apply(simplify_actual_outcome, axis=1)
-        return_loss = float(returns_df.loc[returns_df["actual_outcome"].eq("Return Approved"), "order_value"].sum())
-        return_prevented = float(returns_df.loc[returns_df["actual_outcome"].eq("Return Denied"), "order_value"].sum())
-        denied_returns = int(returns_df["actual_outcome"].eq("Return Denied").sum())
-
-        rc1, rc2, rc3, rc4 = st.columns(4)
-        rc1.metric("Return Reviewed", f"{len(returns_df):,}")
-        rc2.metric("Return Approved Loss", format_currency(return_loss))
-        rc3.metric("Return Denied Prevented", format_currency(return_prevented))
-        rc4.metric("Return Denied Cases", f"{denied_returns:,}")
-
-        rcol1, rcol2 = st.columns(2)
-        return_loss_by_category = (
-            returns_df[returns_df["actual_outcome"].eq("Return Approved")]
-            .groupby("product_category", as_index=False)["order_value"]
-            .sum()
-            .sort_values("order_value", ascending=False)
-            .head(10)
-        )
-        return_loss_by_product = (
-            returns_df[returns_df["actual_outcome"].eq("Return Approved")]
-            .groupby("product_name", as_index=False)["order_value"]
-            .sum()
-            .sort_values("order_value", ascending=False)
-            .head(10)
-        )
-
-        rcol1.plotly_chart(
-            style_chart(px.bar(
-                return_loss_by_category,
-                x="product_category",
-                y="order_value",
-                title="Return Approved Loss by Category",
-                labels={"product_category": "Product Category", "order_value": "Approved Loss"},
-                color_discrete_sequence=["#16a34a"],
-            ), x_tickangle=-25),
-            width="stretch",
-        )
-        rcol2.plotly_chart(
-            style_chart(px.bar(
-                return_loss_by_product,
-                x="product_name",
-                y="order_value",
-                title="Return Approved Loss by Product",
-                labels={"product_name": "Product", "order_value": "Approved Loss"},
-                color_discrete_sequence=["#16a34a"],
-            ), x_tickangle=-25),
-            width="stretch",
-        )
-
-        returns_view = returns_df[
-            [
-                "order_id", "customer_id", "order_date", "actual_outcome",
-                "return_reason_code", "return_reason_text", "customer_return_comment",
-                "product_category", "product_name", "order_value", "ops_resolution_note",
-            ]
-        ].sort_values(["actual_outcome", "order_value"], ascending=[True, False]).head(50)
-
-        st.dataframe(
-            returns_view.style.format({"order_value": "${:,.2f}"}),
-            width="stretch",
-            hide_index=True,
-        )
-    else:
-        rc1, rc2, rc3, rc4 = st.columns(4)
-        rc1.metric("Return Risk Cases", f"{len(returns_df):,}")
-        rc2.metric("Return Risk Revenue", format_currency(
-            returns_df["order_value"].sum()))
-        rc3.metric(
-            "Top Return Category",
-            safe_top_index(
-                returns_df.groupby("product_category")[
-                    "return_risk_score"].mean().sort_values(ascending=False)
-            )
-        )
-        rc4.metric(
-            "Top Return Product",
-            safe_top_index(
-                returns_df.groupby("product_name")[
-                    "return_risk_score"].mean().sort_values(ascending=False)
-            )
-        )
-
-        rcol1, rcol2 = st.columns(2)
-
-        returns_by_category = returns_df.groupby("product_category", as_index=False)[
-            "return_risk_score"].mean().sort_values("return_risk_score", ascending=False)
-        returns_by_product = (
-            returns_df.groupby("product_name", as_index=False)[
-                "return_risk_score"]
-            .mean()
-            .sort_values("return_risk_score", ascending=False)
-            .head(10)
-        )
-
-        rcol1.plotly_chart(
-            style_chart(px.bar(
-                returns_by_category, x="product_category", y="return_risk_score",
-                title="Return Risk Score by Category",
-                labels={"product_category": "Product Category",
-                        "return_risk_score": "Average Return Risk Score"},
-                color_discrete_sequence=["#d97706"],
-            ), x_tickangle=-15),
-            width="stretch"
-        )
-        rcol2.plotly_chart(
-            style_chart(px.bar(
-                returns_by_product, x="product_name", y="return_risk_score",
-                title="Top Products by Return Risk Score",
-                labels={"product_name": "Product Name",
-                        "return_risk_score": "Average Return Risk Score"},
-                color_discrete_sequence=["#d97706"],
-            ), x_tickangle=-30),
-            width="stretch"
-        )
-
-        returns_view = returns_df[
-            [
-                "order_id", "customer_id", "order_date", "product_category", "product_name",
-                "past_returns", "order_value", "return_risk_score", "priority_tier",
-                "case_status", "workflow_stage", "latest_action_taken", "risk_reason_summary",
-                "recommended_action", "ai_agent_next_step"
-            ]
-        ].sort_values(["return_risk_score", "order_value"], ascending=[False, False]).head(50)
-
-        st.dataframe(
-            returns_view.style.format({
-                "order_value": "${:,.2f}",
-                "return_risk_score": "{:.3f}",
-            }),
-            width="stretch"
-        )
-
-# ── Tab 2: Review Queue ───────────────────────────────────────────────────────────
+with tab_profiles:
+    log_once("tab_return_profiles_seen", "tab_view", {"tab": "Customer Return Profiles"})
+    st.subheader("Customer Return Profiles")
+    render_customer_return_profiles(filtered_df, work_mode)
 
 if tab_rq is not None:
   with tab_rq:
@@ -2926,11 +3294,11 @@ if tab_model is not None:
         )
 
 
-# ── Tab 6: Risk Copilot ───────────────────────────────────────────────────────────
+# ── Tab: Return Risk Copilot ───────────────────────────────────────────────────────────
 
 with tab_cp:
     log_once("tab_ai_copilot_seen", "tab_view", {"tab": "Risk Copilot"})
-    st.subheader("Risk Copilot")
+    st.subheader("Return Risk Copilot")
     if work_mode == "Historical Intelligence":
         st.markdown("Use Copilot to ask about **actual historical outcomes**, **approved return loss**, avoided exposure, and policy lessons from the completed period.")
     else:
