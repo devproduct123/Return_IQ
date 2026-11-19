@@ -40,7 +40,9 @@ from src.model_learning import (
 from src.return_profiles import (
     ACTION_TIER_ORDER,
     NETWORK_BANDS,
+    SEGMENTS,
     SIMPLE_NETWORK_BANDS,
+    SIMPLE_SEGMENTS,
     SIMPLE_STORE_BANDS,
     NO_NETWORK_DATA,
     STORE_BANDS,
@@ -1068,6 +1070,7 @@ def render_monthly_return_trend(historical_df: pd.DataFrame):
     trend_col2.plotly_chart(reason_fig, width="stretch")
 
 
+SEGMENTS_BY_ID = {seg["id"]: seg for seg in SEGMENTS.values()}
 ACTION_TIER_COLORS = {
     "Reward": "#15803d",
     "Allow": "#16a34a",
@@ -1077,7 +1080,6 @@ ACTION_TIER_COLORS = {
     "Restrict": "#dc2626",
     "Block / Manual": "#7f1d1d",
 }
-RESTRICTIVE_TIERS = ["Restrict", "Block / Manual"]
 
 
 STORE_BAND_LABELS = {
@@ -1108,6 +1110,7 @@ def build_segment_grid_figure(
     metric_label: str,
     network_available: bool,
     simple: bool = False,
+    height: int | None = None,
 ):
     store_bands = SIMPLE_STORE_BANDS if simple else STORE_BANDS
     store_labels = SIMPLE_STORE_BAND_LABELS if simple else STORE_BAND_LABELS
@@ -1164,7 +1167,7 @@ def build_segment_grid_figure(
         )
     )
     fig.update_layout(
-        height=600 if simple else 760,
+        height=height or (600 if simple else 760),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif", size=13, color="#1e293b"),
@@ -1204,6 +1207,96 @@ def render_segment_card_html(
 """
 
 
+QUEUE_SEGMENT_COLUMNS = [
+    "simple_segment_name", "simple_action_tier", "segment_id", "segment_name",
+    "segment_action_tier", "segment_recommended_action", "store_return_rate", "network_band",
+]
+
+
+def build_queue_segment_lookup(data: pd.DataFrame) -> pd.DataFrame:
+    """Segment columns per order_id, for display in the Review Queue.
+
+    Kept as a separate lookup so segment fields never leak into the case rows that
+    ops actions write back to the live dataset.
+    """
+    if data.empty:
+        return pd.DataFrame(columns=["order_id", *QUEUE_SEGMENT_COLUMNS]).set_index("order_id")
+    profiled = assign_return_profiles(data)
+    lookup = profiled[["order_id", *QUEUE_SEGMENT_COLUMNS]].copy()
+    if "ext_return_rate" in profiled.columns:
+        lookup["ext_return_rate"] = profiled["ext_return_rate"]
+    return lookup.drop_duplicates("order_id").set_index("order_id")
+
+
+def render_case_segment_banner(order_id: str, lookup: pd.DataFrame):
+    if order_id not in lookup.index:
+        return
+    row = lookup.loc[order_id]
+    simple_color = ACTION_TIER_COLORS.get(row["simple_action_tier"], "#334155")
+    detail = SEGMENTS_BY_ID.get(int(row["segment_id"]), {})
+    network_rate = row.get("ext_return_rate")
+    network_text = (
+        f"{float(network_rate) * 100:.0f}% elsewhere ({row['network_band']})"
+        if network_rate is not None and pd.notna(network_rate) else "no network data"
+    )
+    st.markdown(
+        f"""
+<div style="border-left:6px solid {simple_color};background:#f8fafc;padding:12px 18px;border-radius:8px;margin:6px 0 14px 0;">
+  <div style="font-weight:700;color:#0f172a;">Customer segment:
+    <span style="background:{simple_color};color:#fff;font-size:0.8rem;padding:2px 10px;border-radius:10px;margin:0 6px;">{row['simple_segment_name']}</span>
+    <span style="color:#475569;font-weight:600;">{int(row['segment_id'])}. {row['segment_name']}</span>
+  </div>
+  <div style="color:#475569;font-size:0.88rem;margin:4px 0 6px 0;">
+    Returns {float(row['store_return_rate']) * 100:.0f}% of orders in this store · {network_text}
+  </div>
+  <div style="color:#0f172a;font-size:0.92rem;"><b>Segment policy:</b> {row['segment_recommended_action']}</div>
+  <div style="color:#64748b;font-size:0.84rem;margin-top:3px;"><b>Return policy:</b> {detail.get('return_policy', '—')}</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_live_segment_overview(data: pd.DataFrame):
+    """Compact 2x2 for the live Overview: where today's risk is coming from."""
+    st.markdown("### Where Today's Risk Is Coming From")
+    if data.empty:
+        st.info("No orders in the current filter selection.")
+        return
+    network_available = has_network_data(data)
+    profiled = assign_return_profiles(data)
+    summary = summarize_return_profiles(profiled, "simple")
+    open_high = profiled[
+        profiled["risk_level"].astype(str).eq("High") & profiled["case_status"].astype(str).eq("Open")
+    ]
+    open_counts = open_high["simple_segment_name"].value_counts()
+
+    st.caption(
+        "Customer segments by return history here × at other stores. Cell colour = high-risk rate. "
+        "Filter the **Review Queue** by segment to work these cases; the full segment playbook is in "
+        "Historical Intelligence → Customer Return Profiles."
+    )
+    grid_col, list_col = st.columns([3, 2])
+    grid_col.plotly_chart(
+        build_segment_grid_figure(summary, "high_risk_pct", "High-risk rate", network_available, simple=True, height=430),
+        width="stretch",
+        config={"displayModeBar": False},
+    )
+    rows = summary.assign(open_cases=summary["segment_name"].map(open_counts).fillna(0).astype(int))
+    list_col.markdown("**Open high-risk cases by segment**")
+    for _, row in rows.sort_values("segment_id").iterrows():
+        color = ACTION_TIER_COLORS.get(row["action_tier"], "#334155")
+        list_col.markdown(
+            f"""
+<div style="border:1px solid #e2e8f0;border-left:5px solid {color};border-radius:8px;padding:8px 12px;margin-bottom:8px;">
+  <div style="display:flex;justify-content:space-between;"><b>{row['segment_name']}</b><span style="font-weight:700;color:{color};">{row['open_cases']:,} open</span></div>
+  <div style="font-size:0.8rem;color:#475569;">{row['recommended_action']}</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+
 def render_customer_return_profiles(data: pd.DataFrame, work_mode: str):
     is_historical = work_mode == "Historical Intelligence"
     st.markdown(
@@ -1232,34 +1325,10 @@ def render_customer_return_profiles(data: pd.DataFrame, work_mode: str):
     simple = view.startswith("Simple")
     level = "simple" if simple else "detailed"
     name_col = "simple_segment_name" if simple else "segment_name"
-    tier_col = "simple_action_tier" if simple else "segment_action_tier"
 
     profiled = assign_return_profiles(data)
     summary = summarize_return_profiles(profiled, level)
     active = summary[summary["orders"] > 0]
-
-    restrictive = profiled[tier_col].isin(RESTRICTIVE_TIERS)
-    network_flagged = profiled["network_band"].eq("Flagged")
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Active Segments", f"{len(active)} / {len(summary)}")
-    k2.metric(
-        "Orders in Restrict / Block Segments",
-        f"{int(restrictive.sum()):,}",
-        f"{restrictive.mean() * 100:.1f}% of orders",
-        delta_color="off",
-    )
-    k3.metric(
-        "Network-Flagged Customers",
-        f"{profiled.loc[network_flagged, 'customer_id'].nunique():,}" if network_available else "—",
-    )
-    if is_historical:
-        restricted_loss = float(
-            profiled.loc[restrictive & pd.to_numeric(profiled["return_completed"], errors="coerce").eq(1), "order_value"].sum()
-        )
-        k4.metric("Approved Return Value (Restrict / Block)", format_currency(restricted_loss))
-    else:
-        open_restricted = int((restrictive & profiled["case_status"].astype(str).eq("Open")).sum())
-        k4.metric("Open Cases in Restrict / Block Segments", f"{open_restricted:,}")
 
     # ── Segment grid (full width) ───────────────────────────────────────────────
     metric_col = "return_request_rate_pct" if is_historical else "high_risk_pct"
@@ -2558,10 +2627,11 @@ if work_mode == "Historical Intelligence":
     )
     tab_rq = None
 else:
-    tab_rq, tab_ov, tab_profiles, tab_cp = st.tabs(
-        ["Review Queue", "Overview", "Customer Return Profiles", "Return Risk Copilot"]
+    tab_rq, tab_ov, tab_cp = st.tabs(
+        ["Review Queue", "Overview", "Return Risk Copilot"]
     )
     tab_model = None
+    tab_profiles = None
 
 # ── Tab: Overview ──────────────────────────────────────────────────────────────
 
@@ -2573,6 +2643,8 @@ with tab_ov:
         render_historical_intelligence_view(filtered_df)
         render_approved_return_value_by_product(filtered_df)
     else:
+        render_live_segment_overview(filtered_df)
+        st.markdown("### Queue Trends")
         col1, col2 = st.columns(2)
 
         trend_df = (
@@ -2711,7 +2783,8 @@ with tab_ov:
 
 # ── Tab: Customer Return Profiles ────────────────────────────────────────────────
 
-with tab_profiles:
+if tab_profiles is not None:
+  with tab_profiles:
     log_once("tab_return_profiles_seen", "tab_view", {"tab": "Customer Return Profiles"})
     st.subheader("Customer Return Profiles")
     render_customer_return_profiles(filtered_df, work_mode)
@@ -2724,13 +2797,36 @@ if tab_rq is not None:
     if st.session_state.get("last_ops_action_notice"):
         st.success(st.session_state.pop("last_ops_action_notice"))
 
-    flagged_df = sort_cases_by_priority(get_open_high_risk_cases(filtered_df))
-    closed_flagged_cases = filtered_df[
-        (filtered_df["risk_level"] == "High") & (
-            filtered_df["case_status"] == "Closed")
+    queue_segments = build_queue_segment_lookup(filtered_df[filtered_df["risk_level"] == "High"])
+    open_ids = get_open_high_risk_cases(filtered_df)["order_id"]
+    open_segment_counts = queue_segments.loc[
+        queue_segments.index.intersection(open_ids), "simple_segment_name"
+    ].value_counts()
+    segment_filter_options = ["All segments", *[seg["name"] for seg in SIMPLE_SEGMENTS.values()]]
+    segment_filter = st.selectbox(
+        "Customer segment",
+        segment_filter_options,
+        key="queue_segment_filter",
+        format_func=lambda name: (
+            f"All segments ({int(open_segment_counts.sum()):,} open)" if name == "All segments"
+            else f"{name} ({int(open_segment_counts.get(name, 0)):,} open)"
+        ),
+        help="Filter the queue by customer return profile (store history × network history).",
+    )
+    queue_scope = filtered_df
+    if segment_filter != "All segments":
+        segment_ids = queue_segments.index[queue_segments["simple_segment_name"].eq(segment_filter)]
+        queue_scope = filtered_df[filtered_df["order_id"].isin(segment_ids)]
+        segment_def = next(seg for seg in SIMPLE_SEGMENTS.values() if seg["name"] == segment_filter)
+        st.caption(f"**{segment_filter} policy:** {segment_def['recommended_action']}")
+
+    flagged_df = sort_cases_by_priority(get_open_high_risk_cases(queue_scope))
+    closed_flagged_cases = queue_scope[
+        (queue_scope["risk_level"] == "High") & (
+            queue_scope["case_status"] == "Closed")
     ].copy()
     all_flagged_cases = sort_cases_by_priority(
-        filtered_df[filtered_df["risk_level"] == "High"].copy()
+        queue_scope[queue_scope["risk_level"] == "High"].copy()
     )
     protected_revenue = float(closed_flagged_cases["order_value"].sum())
     closure_rate = (
@@ -2798,6 +2894,14 @@ if tab_rq is not None:
                     "recommended_action", "latest_action_taken", "risk_reason_summary",
                 ]
             ].rename(columns={"risk_type_display": "risk_type"}).head(50)
+            open_case_view.insert(
+                2, "segment",
+                open_case_view["order_id"].map(queue_segments["simple_segment_name"]).fillna("—"),
+            )
+            open_case_view.insert(
+                3, "detailed_segment",
+                open_case_view["order_id"].map(queue_segments["segment_name"]).fillna("—"),
+            )
 
             st.dataframe(
                 open_case_view.style.format({
@@ -2832,6 +2936,7 @@ if tab_rq is not None:
         dc3.metric("Priority", str(selected_case["priority_tier"]))
         dc4.metric("Case Status", str(selected_case["case_status"]))
 
+        render_case_segment_banner(selected_order_id, queue_segments)
         render_case_detail_box(selected_case)
 
         with st.expander("Case signals and timeline", expanded=False):

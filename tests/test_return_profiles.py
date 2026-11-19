@@ -35,8 +35,9 @@ def _orders(rows):
 
 
 def test_store_band_thresholds_and_thin_file():
-    bands = assign_store_band([10, 10, 10, 10, 2], [0, 2, 4, 5, 2]).tolist()
-    assert bands == ["Low", "Low", "Frequent", "Serial", "New / Thin File"]
+    # 20% is the Low/Frequent boundary (inclusive), 40% the Frequent/Serial boundary.
+    bands = assign_store_band([10, 10, 10, 10, 10, 2], [0, 2, 3, 4, 5, 2]).tolist()
+    assert bands == ["Low", "Low", "Frequent", "Frequent", "Serial", "New / Thin File"]
 
 
 def test_network_band_rules():
